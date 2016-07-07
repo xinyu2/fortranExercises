@@ -248,12 +248,12 @@ c!}}}
 c
 c
 c
-      subroutine scatter_inputstruct(ndim,icell1,ncell)
+      subroutine scatter_inputstruct(ndim,icell1,ncell,igeom)
 c     -------------------------------------------------!{{{
       use inputstrmod
       use gasmod
       implicit none
-      integer,intent(in) :: ndim(3)
+      integer,intent(in) :: ndim(3),igeom
       integer,intent(out) :: icell1,ncell
 ************************************************************************
 * mpi_scatter the input structure to all ranks in the worker comm.
@@ -265,9 +265,9 @@ c
       ny = ndim(2)
       nz = ndim(3)
 
-      edgelen=getedge(nmpi,ndim) ! cube edge's length
+      edgelen=getedge(nmpi,ndim,igeom) ! cube edge's length
       write(6,*) 'nx=',nx,'ny=',ny,'nz=',nz,'nmpi=',nmpi
-      write(6,*) 'edgelength=',edgelen
+      write(6,*) 'edgelength=',edgelen,'igeom=',igeom
 c
 c-- calculate offsets
       allocate(counts(nmpi),displs(nmpi))
@@ -320,14 +320,27 @@ c-- ye structure if available
       endif
 !}}}
       contains
-      integer function getedge(nmpi,ndim)
+      integer function getedge(nmpi,ndim,igeom)
       implicit none
-      integer,intent(in) :: nmpi,ndim(3)
-      integer::l,nx,ny,nz
+      integer,intent(in) :: nmpi,ndim(3),igeom
+      integer::l,nx,ny,nz,volume
+      real::tasks,temp
+
       nx=ndim(1)
       ny=ndim(2)
       nz=ndim(3)
-      l=ceiling((nx*ny*nz)/(nmpi+0d0))
+
+      volume=nx*ny*nz
+      tasks=nmpi+0d0
+      temp=volume/tasks
+      write(6,*) 'vol=',volume,'tasks=',tasks,'temp=',temp
+      if(igeom==2) then
+         l=ceiling(temp**(1.0/2.0))
+      else if(igeom==3) then
+         l=ceiling(temp**(1.0/3.0))
+      else
+         l=ceiling(volume/tasks)
+      endif
       getedge=l
       end function getedge
       end subroutine scatter_inputstruct
