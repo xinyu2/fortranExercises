@@ -1,3 +1,4 @@
+
 !This file is part of SuperNu.  SuperNu is released under the terms of the GNU GPLv3, see COPYING.
 !Copyright (c) 2013-2015 Ryan T. Wollaeger and Daniel R. van Rossum.  All rights reserved.
 program supernu
@@ -38,7 +39,10 @@ program supernu
 !-- mpi initialization
   call mpi_init(ierr) !MPI
   call mpi_comm_rank(MPI_COMM_WORLD,impi,ierr) !MPI
+  write(*,*) "impi is:",impi !cxy-read
   call mpi_comm_size(MPI_COMM_WORLD,nmpi,ierr) !MPI
+  write(*,*) "nmpi is:",nmpi !cxy-read
+  write(*,*)                 !cxy-read
   lmpi0 = impi==impi0
 !
 !-- initialize timing module
@@ -85,6 +89,8 @@ program supernu
      t1 = t_time()
      t_setup = t1-t0!}}}
   endif !impi
+!  write(*,*) "impi=",impi,"ncell=",ncell,"icell1=",icell1
+
 !-- broadcast init info from impi0 rank to all others
   call bcast_permanent !MPI
   call provide_inputpars(nmpi)
