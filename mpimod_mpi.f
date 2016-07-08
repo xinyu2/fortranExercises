@@ -262,8 +262,11 @@ c     -------------------------------------------------!{{{
       integer :: i,n,nc,nx,ny,nz
       integer :: edgelen,nboxes !,reorderidx
       integer, dimension(:), allocatable :: corners
-      integer, dimension(:), allocatable :: arr_reorder ! milagro (nx*ny*nz) reorder the index of origin arras: str_mass,str_temp,etc
-      real*8,allocatable :: arr_scatter(:) !(nc) store everything to be scattered in reordered index
+!     milagro: reorder the origin arrays: str_mass,str_temp,etc
+      integer, dimension(:), allocatable :: arr_reorder
+!     milagro: store everything to be scattered in reordered index
+      real*8,allocatable :: arr_scatter(:) !(nc)
+      real*8,allocatable :: reorder_massfrdc(:,:) !(nabund,nc)
 c
       nx = ndim(1)
       ny = ndim(2)
@@ -271,8 +274,6 @@ c
 
       if(impi==impi0) then
          edgelen=getedge(nmpi,ndim,igeom) ! cube edge's length
-c--      write(6,*) 'nx=',nx,'ny=',ny,'nz=',nz,'nmpi=',nmpi
-c--      write(6,*) 'edgelength=',edgelen,'igeom=',igeom
       endif
 
 c
@@ -282,10 +283,8 @@ c-- calculate offsets
       nc = str_nc
 
 !     milagro dd: put arrays to arr_reorder
-!     then scatter them by mpi-scatterv
+!     then scatter them by mpiscatterv
 !     this is done by master
-c--   write(6,*) ">> before scatter >>"
-c--   write(6,*) '>> nc=',nc,'str_nc=',str_nc
       if(impi==impi0) then
          select case(igeom)
          case(1,11) !arr_reorder=raw order(xyz)
@@ -327,12 +326,16 @@ c-- allocate domain decomposed and domain compressed
 c
 c-- mass fractions if available
       if(str_nabund>0) then
-       if(impi/=impi0) allocate(str_massfrdc(str_nabund,str_nc))
-       allocate(str_massfrdd(str_nabund,ncell))
-       n = str_nabund
-       call mpi_scatterv(str_massfrdc,n*counts,n*displs,MPI_REAL8,
-     &   str_massfrdd,n*ncell,MPI_REAL8,
-     &   impi0,MPI_COMM_WORLD,ierr)
+!        if(impi/=impi0) allocate(str_massfrdc(str_nabund,str_nc))
+         if(impi==impi0) call getMassfrdc(igeom,str_nabund,
+     &     str_nc,str_massfrdc,arr_reorder,reorder_massfrdc)
+         if(impi/=impi0) allocate(reorder_massfrdc(str_nabund,str_nc))
+         allocate(str_massfrdd(str_nabund,ncell))
+         n = str_nabund
+!        call mpi_scatterv(str_massfrdc,n*counts,n*displs,MPI_REAL8,
+         call mpi_scatterv(reorder_massfrdc,n*counts,n*displs,MPI_REAL8,
+     &        str_massfrdd,n*ncell,MPI_REAL8,
+     &        impi0,MPI_COMM_WORLD,ierr)
       endif
 c
 c-- gas temperature structure if available
@@ -384,7 +387,6 @@ c-- ye structure if available
       volume=nx*ny*nz
       tasks=nmpi+0.0
       temp=volume/tasks
-c--   write(6,*) 'vol=',volume,'tasks=',tasks,'temp=',temp
       if(igeom==2) then
          l=ceiling(temp**(1.0/2.0))
       else if(igeom==3) then
@@ -443,22 +445,41 @@ c--   write(6,*) 'vol=',volume,'tasks=',tasks,'temp=',temp
       integer,dimension(:),intent(in)::in_order
       real*8,dimension(:),allocatable,intent(out)::out_arr
       integer::i,idx
-!     write(6,*) ">>> before scatterv",igeom,str_nc
       allocate(out_arr(arr_size)) !allocate array to be scattered
       if((igeom==1).or.(igeom==11)) then
          do i=1,arr_size
             out_arr(i)=in_arr(i)
-            write(6,*) "> ",i,in_arr(i),out_arr(i)
          enddo
       else
          do i=1,arr_size
             idx=in_order(i)
             out_arr(i)=in_arr(idx)
-            write(6,*) "> ",i,in_order(i),idx,
-     &           in_arr(idx),out_arr(i)
          enddo
       endif
       end subroutine getScatter
+
+!     getMassfrdc(igeom,str_nabund,str_nc,str_massfrdc,
+!     &           arr_reorder,reorder_massfrdc)
+      subroutine getMassfrdc(igeom,nabund,arr_size,in_arr,
+     &                       in_order,out_arr)
+      implicit none
+      integer,intent(in)::igeom,nabund,arr_size
+      real*8,dimension(:,:),intent(in)::in_arr
+      integer,dimension(:),intent(in)::in_order
+      real*8,dimension(:,:),allocatable,intent(out)::out_arr
+      integer::i,idx
+      allocate(out_arr(nabund,arr_size)) !allocate array to be scattered
+      if((igeom==1).or.(igeom==11)) then
+         do i=1,arr_size
+            out_arr(:,i)=in_arr(:,i)
+         enddo
+      else
+         do i=1,arr_size
+            idx=in_order(i)
+            out_arr(:,i)=in_arr(:,idx)
+         enddo
+      endif
+      end subroutine getMassfrdc
 
       end subroutine scatter_inputstruct
 c
