@@ -54,7 +54,10 @@ c     ---------------------------!{{{
       if(allocated(str_iabund)) deallocate(str_iabund)
       deallocate(str_xleft,str_yleft,str_zleft)
       deallocate(str_idcell)
-      deallocate(str_massdc,str_massdd)
+!     deallocate(str_massdc,str_massdd)
+!     milagro dd
+      if(allocated(str_massdc)) deallocate(str_massdc)
+      if(allocated(str_massdd)) deallocate(str_massdd)
       if(str_nabund>0) then
        deallocate(str_massfrdc,str_massfrdd)
        if(allocated(str_abundlabl)) deallocate(str_abundlabl) !only on impi0
