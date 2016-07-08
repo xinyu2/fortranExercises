@@ -258,21 +258,45 @@ c     -------------------------------------------------!{{{
 ************************************************************************
 * mpi_scatter the input structure to all ranks in the worker comm.
 ************************************************************************
+      !-- milagro dd vars
       integer :: i,n,nc,nx,ny,nz
-      integer :: edgelen, masscnt
+      integer :: edgelen,cc
+      real*8,allocatable :: arr_temp(:) ! milagro (nx*ny*nz)
 c
       nx = ndim(1)
       ny = ndim(2)
       nz = ndim(3)
 
-      edgelen=getedge(nmpi,ndim,igeom) ! cube edge's length
-      write(6,*) 'nx=',nx,'ny=',ny,'nz=',nz,'nmpi=',nmpi
-      write(6,*) 'edgelength=',edgelen,'igeom=',igeom
+      if(impi==impi0) then
+         edgelen=getedge(nmpi,ndim,igeom) ! cube edge's length
+c--      write(6,*) 'nx=',nx,'ny=',ny,'nz=',nz,'nmpi=',nmpi
+c--      write(6,*) 'edgelength=',edgelen,'igeom=',igeom
+      endif
+
 c
 c-- calculate offsets
       allocate(counts(nmpi),displs(nmpi))
       displs(1) = 0
       nc = str_nc
+
+!     milagro dd: put arrays to arr_temp
+!     then scatter them by mpi-scatterv
+!     this is done by master
+c--   write(6,*) ">> before scatter >>"
+c--   write(6,*) '>> nc=',nc,'str_nc=',str_nc
+      if(impi==impi0) then
+         allocate(arr_temp(nc)) ! milagro
+         deallocate(arr_temp)   ! milagro
+         select case(igeom)
+         case(1,11) !arr_temp=str_massdc
+         case(2)
+            cc=getCorners(nx,ny,edgelen)
+         case(3)
+         case default
+            stop 'igeom invalid'
+         endselect
+      endif
+
       do i=1,nmpi
        n = ceiling(nc/(nmpi-i+1d0))
        counts(i) = n
@@ -281,16 +305,17 @@ c-- calculate offsets
        if(i<nmpi) displs(i+1) = displs(i) + n
        nc = nc - n
       enddo
+
       if(sum(counts)/=str_nc) stop 'scatter_inputstr: counts/=str_nc'
       if(nc/=0) stop 'scatter_inputstr: nc/=0'
-      write(6,*) 'taskid=',impi,'disp=',displs
 c
 c-- allocate domain decomposed and domain compressed
       if(impi/=impi0) allocate(str_massdc(str_nc))
       allocate(str_massdd(ncell))
       call mpi_scatterv(str_massdc,counts,displs,MPI_REAL8,
      &  str_massdd,ncell,MPI_REAL8,
-     &  impi0,MPI_COMM_WORLD,ierr)
+     &     impi0,MPI_COMM_WORLD,ierr)
+
 c
 c-- mass fractions if available
       if(str_nabund>0) then
@@ -319,6 +344,10 @@ c-- ye structure if available
      &  impi0,MPI_COMM_WORLD,ierr)
       endif
 !}}}
+
+!     milagro dd function: get the length of edge
+!     2D, the length is sqrt of cells per rank
+!     3D, the length is cbrt of cells per rank
       contains
       integer function getedge(nmpi,ndim,igeom)
       implicit none
@@ -333,7 +362,7 @@ c-- ye structure if available
       volume=nx*ny*nz
       tasks=nmpi+0d0
       temp=volume/tasks
-      write(6,*) 'vol=',volume,'tasks=',tasks,'temp=',temp
+c--   write(6,*) 'vol=',volume,'tasks=',tasks,'temp=',temp
       if(igeom==2) then
          l=ceiling(temp**(1.0/2.0))
       else if(igeom==3) then
@@ -343,6 +372,34 @@ c-- ye structure if available
       endif
       getedge=l
       end function getedge
+
+      integer function getCorners(nx,ny,len)
+      implicit none
+      integer, intent(in)::nx,ny,len
+      integer::i,j,corners,nboxes,p
+      integer,allocatable :: pos(:)
+      corners=0
+      nboxes=(nx*ny)/(len*len)
+      allocate(pos(nboxes))
+      write(6,*) ">> getCorners",nx,ny,len
+      do j=1,ny,len
+         do i=1,nx,len
+            p=(j-1)*nx+i
+            corners=corners+1
+            write(6,*) "box@",p
+            pos(corners)=p
+            !call getBox(pos,nx,len)
+         enddo                  !x
+      enddo                     !y
+      getCorners=corners
+      deallocate(pos)
+      end function getCorners
+
+      !subroutine getBox(pos,nx,len)
+      !implicit none
+
+      !end subroutine getBox
+
       end subroutine scatter_inputstruct
 c
 c
