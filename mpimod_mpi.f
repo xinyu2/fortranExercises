@@ -310,34 +310,17 @@ c--   write(6,*) '>> nc=',nc,'str_nc=',str_nc
       if(sum(counts)/=str_nc) stop 'scatter_inputstr: counts/=str_nc'
       if(nc/=0) stop 'scatter_inputstr: nc/=0'
 
-!      if(impi==impi0) then
-!         !call getScatter(igeom,str_nc,str_massdc,arr_reorder,arr_scatter)
-!         write(6,*) ">>> before scatterv",igeom,str_nc
-!         allocate(arr_scatter(str_nc)) !allocate array to be scattered
-!         if((igeom==1).or.(igeom==11)) then
-!            do i=1,str_nc
-!               arr_scatter(i)=str_massdc(i)
-!               write(6,*) "> ",i,str_massdc(i),arr_scatter(i)
-!            enddo
-!         else
-!            do i=1,str_nc
-!               reorderidx=arr_reorder(i)
-!               arr_scatter(i)=str_massdc(reorderidx)
-!               write(6,*) "> ",i,arr_reorder(i),reorderidx,
-!     &              str_massdc(reorderidx),arr_scatter(i)
-!            enddo
-!         endif
-!     endif
-
 c
 c-- allocate domain decomposed and domain compressed
 !     if(impi/=impi0) allocate(str_massdc(str_nc))
+!     milagro dd: use arr_scatter replace str_massdc
       if(impi==impi0) call getScatter(igeom,str_nc,str_massdc,
      &     arr_reorder,arr_scatter)
       if(impi/=impi0) allocate(arr_scatter(str_nc))
       allocate(str_massdd(ncell))
 
-!      call mpi_scatterv(str_massdc,counts,displs,MPI_REAL8,
+!     call mpi_scatterv(str_massdc,counts,displs,MPI_REAL8,
+!     milagro dd: use arr_scatter replace str_massdc
       call mpi_scatterv(arr_scatter,counts,displs,MPI_REAL8,
      &        str_massdd,ncell,MPI_REAL8,
      &        impi0,MPI_COMM_WORLD,ierr)
@@ -354,19 +337,30 @@ c-- mass fractions if available
 c
 c-- gas temperature structure if available
       if(str_ltemp) then
-       if(impi/=impi0) allocate(str_tempdc(str_nc))
+        if(impi==impi0) call getScatter(igeom,str_nc,str_tempdc,
+     &        arr_reorder,arr_scatter)
+!      if(impi/=impi0) allocate(str_tempdc(str_nc))
+!      milagro dd: use arr_scatter replace str_tempdc
+       if(impi/=impi0) allocate(arr_scatter(str_nc))
        allocate(str_tempdd(ncell))
-       call mpi_scatterv(str_tempdc,counts,displs,MPI_REAL8,
+!      call mpi_scatterv(str_tempdc,counts,displs,MPI_REAL8,
+!      milagro dd: use arr_scatter replace str_tempdc
+       call mpi_scatterv(arr_scatter,counts,displs,MPI_REAL8,
      &  str_tempdd,ncell,MPI_REAL8,
      &  impi0,MPI_COMM_WORLD,ierr)
       endif
 c-- ye structure if available
       if(str_lye) then
-       if(impi/=impi0) allocate(str_yedc(str_nc))
-       allocate(str_yedd(ncell))
-       call mpi_scatterv(str_yedc,counts,displs,MPI_REAL8,
-     &  str_yedd,ncell,MPI_REAL8,
-     &  impi0,MPI_COMM_WORLD,ierr)
+         if(impi==impi0) call getScatter(igeom,str_nc,str_yedc,
+     &        arr_reorder,arr_scatter)
+!        if(impi/=impi0) allocate(str_yedc(str_nc))
+!        milagro dd: use arr_scatter replace str_yedc
+         if(impi/=impi0) allocate(arr_scatter(str_nc))
+         allocate(str_yedd(ncell))
+!        call mpi_scatterv(str_yedc,counts,displs,MPI_REAL8,
+         call mpi_scatterv(arr_scatter,counts,displs,MPI_REAL8,
+     &        str_yedd,ncell,MPI_REAL8,
+     &        impi0,MPI_COMM_WORLD,ierr)
       endif
 !}}}
 
@@ -449,7 +443,7 @@ c--   write(6,*) 'vol=',volume,'tasks=',tasks,'temp=',temp
       integer,dimension(:),intent(in)::in_order
       real*8,dimension(:),allocatable,intent(out)::out_arr
       integer::i,idx
-      write(6,*) ">>> before scatterv",igeom,str_nc
+!     write(6,*) ">>> before scatterv",igeom,str_nc
       allocate(out_arr(arr_size)) !allocate array to be scattered
       if((igeom==1).or.(igeom==11)) then
          do i=1,arr_size
