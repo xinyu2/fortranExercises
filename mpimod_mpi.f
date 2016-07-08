@@ -260,8 +260,10 @@ c     -------------------------------------------------!{{{
 ************************************************************************
       !-- milagro dd vars
       integer :: i,n,nc,nx,ny,nz
-      integer :: edgelen
-      real*8,allocatable :: arr_temp(:) ! milagro (nx*ny*nz)
+      integer :: edgelen,nboxes,reorderidx
+      integer, dimension(:), allocatable :: corners
+      integer, dimension(:), allocatable :: arr_reorder ! milagro (nx*ny*nz) reorder the index of origin arras: str_mass,str_temp,etc
+      real*8,allocatable :: arr_scatter(:) !(nc) store everything to be scattered in reordered index
 c
       nx = ndim(1)
       ny = ndim(2)
@@ -279,18 +281,17 @@ c-- calculate offsets
       displs(1) = 0
       nc = str_nc
 
-!     milagro dd: put arrays to arr_temp
+!     milagro dd: put arrays to arr_reorder
 !     then scatter them by mpi-scatterv
 !     this is done by master
 c--   write(6,*) ">> before scatter >>"
 c--   write(6,*) '>> nc=',nc,'str_nc=',str_nc
       if(impi==impi0) then
-         allocate(arr_temp(nc)) ! milagro
-         deallocate(arr_temp)   ! milagro
          select case(igeom)
-         case(1,11) !arr_temp=str_massdc
+         case(1,11) !arr_reorder=raw order(xyz)
          case(2)
-            call getCorners(nx,ny,edgelen)
+            call getCorners(nx,ny,edgelen,nboxes,corners)
+            call getReorder(nx,edgelen,nboxes,corners,arr_reorder)
          case(3)
          case default
             stop 'igeom invalid'
@@ -308,14 +309,35 @@ c--   write(6,*) '>> nc=',nc,'str_nc=',str_nc
 
       if(sum(counts)/=str_nc) stop 'scatter_inputstr: counts/=str_nc'
       if(nc/=0) stop 'scatter_inputstr: nc/=0'
+
+      if(impi==impi0) then
+         !call getScatter(igeom,str_nc,str_massdc,arr_reorder,arr_scatter)
+         write(6,*) ">>> before scatterv",igeom,str_nc
+         allocate(arr_scatter(str_nc)) !allocate array to be scattered
+         if((igeom==1).or.(igeom==11)) then
+            do i=1,str_nc
+               arr_scatter(i)=str_massdc(i)
+               write(6,*) "> ",i,str_massdc(i),arr_scatter(i)
+            enddo
+         else
+            do i=1,str_nc
+               reorderidx=arr_reorder(i)
+               arr_scatter(i)=str_massdc(reorderidx)
+               write(6,*) "> ",i,arr_reorder(i),reorderidx,
+     &              str_massdc(reorderidx),arr_scatter(i)
+            enddo
+         endif
+      endif
 c
 c-- allocate domain decomposed and domain compressed
-      if(impi/=impi0) allocate(str_massdc(str_nc))
+!      if(impi/=impi0) allocate(str_massdc(str_nc))
+      if(impi/=impi0) allocate(arr_scatter(str_nc))
       allocate(str_massdd(ncell))
-      call mpi_scatterv(str_massdc,counts,displs,MPI_REAL8,
-     &  str_massdd,ncell,MPI_REAL8,
-     &     impi0,MPI_COMM_WORLD,ierr)
 
+!      call mpi_scatterv(str_massdc,counts,displs,MPI_REAL8,
+      call mpi_scatterv(arr_scatter,counts,displs,MPI_REAL8,
+     &        str_massdd,ncell,MPI_REAL8,
+     &        impi0,MPI_COMM_WORLD,ierr)
 c
 c-- mass fractions if available
       if(str_nabund>0) then
@@ -345,6 +367,9 @@ c-- ye structure if available
       endif
 !}}}
 
+      deallocate(arr_scatter)   !deallocate arr_scatter
+
+
 !     milagro dd function: get the length of edge
 !     2D, the length is sqrt of cells per rank
 !     3D, the length is cbrt of cells per rank
@@ -360,7 +385,7 @@ c-- ye structure if available
       nz=ndim(3)
 
       volume=nx*ny*nz
-      tasks=nmpi+0d0
+      tasks=nmpi+0.0
       temp=volume/tasks
 c--   write(6,*) 'vol=',volume,'tasks=',tasks,'temp=',temp
       if(igeom==2) then
@@ -373,14 +398,69 @@ c--   write(6,*) 'vol=',volume,'tasks=',tasks,'temp=',temp
       getedge=l
       end function getedge
 
-      integer function getCorners(nx,ny,len)
+      subroutine getCorners(nx,ny,len,nboxes,pos)
       implicit none
       integer, intent(in)::nx,ny,len
-      integer::corners
-      corners=0
-      write(6,*) ">> getCorners",nx,ny,len
-      getCorners=corners
-      end function getCorners
+      integer, intent(out)::nboxes
+      integer,dimension(:),allocatable,intent(out) :: pos
+      integer::i,j,cc,p
+
+      nboxes=0
+      cc=(nx*ny)/(len*len)
+      allocate(pos(cc))
+      do j=1,ny,len
+         do i=1,nx,len
+            p=(j-1)*nx+i
+            nboxes=nboxes+1
+            pos(nboxes)=p
+         enddo                  !end x
+      enddo                     !end y
+      end subroutine getCorners
+
+      subroutine getReorder(nx,len,nboxes,corners,arr_reorder)
+      implicit none
+      integer,intent(in)::nx,len,nboxes
+      integer,dimension(:),intent(in)::corners
+      integer,dimension(:),allocatable,intent(out)::arr_reorder
+      integer::arr_size,i,j,k,l,idx,box_offset
+      arr_size=len*len*nboxes
+      allocate(arr_reorder(arr_size))
+      box_offset=0
+      l=0                       !l should == arr_size
+      do k=1,nboxes
+         box_offset=corners(k)-corners(1)
+         do j=1,len
+            do i=1,len
+               l=l+1
+               idx=(j-1)*nx+i+box_offset
+               arr_reorder(l)=idx
+            enddo
+         enddo
+      enddo
+      end subroutine getReorder
+
+      subroutine getScatter(igeom,arr_size,in_arr,in_order,out_arr)
+      implicit none
+      integer,intent(in)::igeom,arr_size
+      integer,dimension(:),intent(in)::in_arr,in_order
+      integer,dimension(:),allocatable,intent(out)::out_arr
+      integer::i,idx
+      write(6,*) ">>> before scatterv",igeom,str_nc
+      allocate(out_arr(arr_size)) !allocate array to be scattered
+      if((igeom==1).or.(igeom==11)) then
+         do i=1,arr_size
+            out_arr(i)=in_arr(i)
+            write(6,*) "> ",i,in_arr(i),out_arr(i)
+         enddo
+      else
+         do i=1,arr_size
+            idx=in_order(i)
+            out_arr(i)=in_arr(idx)
+            write(6,*) "> ",i,in_order(i),idx,
+     &           in_arr(idx),out_arr(i)
+         enddo
+      endif
+      end subroutine getScatter
 
       end subroutine scatter_inputstruct
 c
