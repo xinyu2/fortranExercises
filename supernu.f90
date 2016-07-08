@@ -39,10 +39,7 @@ program supernu
 !-- mpi initialization
   call mpi_init(ierr) !MPI
   call mpi_comm_rank(MPI_COMM_WORLD,impi,ierr) !MPI
-  write(*,*) "impi is:",impi !cxy-read
   call mpi_comm_size(MPI_COMM_WORLD,nmpi,ierr) !MPI
-  write(*,*) "nmpi is:",nmpi !cxy-read
-  write(*,*)                 !cxy-read
   lmpi0 = impi==impi0
 !
 !-- initialize timing module

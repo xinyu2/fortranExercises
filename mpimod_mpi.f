@@ -260,7 +260,7 @@ c     -------------------------------------------------!{{{
 ************************************************************************
       !-- milagro dd vars
       integer :: i,n,nc,nx,ny,nz
-      integer :: edgelen,nboxes,reorderidx
+      integer :: edgelen,nboxes !,reorderidx
       integer, dimension(:), allocatable :: corners
       integer, dimension(:), allocatable :: arr_reorder ! milagro (nx*ny*nz) reorder the index of origin arras: str_mass,str_temp,etc
       real*8,allocatable :: arr_scatter(:) !(nc) store everything to be scattered in reordered index
@@ -310,27 +310,30 @@ c--   write(6,*) '>> nc=',nc,'str_nc=',str_nc
       if(sum(counts)/=str_nc) stop 'scatter_inputstr: counts/=str_nc'
       if(nc/=0) stop 'scatter_inputstr: nc/=0'
 
-      if(impi==impi0) then
-         !call getScatter(igeom,str_nc,str_massdc,arr_reorder,arr_scatter)
-         write(6,*) ">>> before scatterv",igeom,str_nc
-         allocate(arr_scatter(str_nc)) !allocate array to be scattered
-         if((igeom==1).or.(igeom==11)) then
-            do i=1,str_nc
-               arr_scatter(i)=str_massdc(i)
-               write(6,*) "> ",i,str_massdc(i),arr_scatter(i)
-            enddo
-         else
-            do i=1,str_nc
-               reorderidx=arr_reorder(i)
-               arr_scatter(i)=str_massdc(reorderidx)
-               write(6,*) "> ",i,arr_reorder(i),reorderidx,
-     &              str_massdc(reorderidx),arr_scatter(i)
-            enddo
-         endif
-      endif
+!      if(impi==impi0) then
+!         !call getScatter(igeom,str_nc,str_massdc,arr_reorder,arr_scatter)
+!         write(6,*) ">>> before scatterv",igeom,str_nc
+!         allocate(arr_scatter(str_nc)) !allocate array to be scattered
+!         if((igeom==1).or.(igeom==11)) then
+!            do i=1,str_nc
+!               arr_scatter(i)=str_massdc(i)
+!               write(6,*) "> ",i,str_massdc(i),arr_scatter(i)
+!            enddo
+!         else
+!            do i=1,str_nc
+!               reorderidx=arr_reorder(i)
+!               arr_scatter(i)=str_massdc(reorderidx)
+!               write(6,*) "> ",i,arr_reorder(i),reorderidx,
+!     &              str_massdc(reorderidx),arr_scatter(i)
+!            enddo
+!         endif
+!     endif
+
 c
 c-- allocate domain decomposed and domain compressed
-!      if(impi/=impi0) allocate(str_massdc(str_nc))
+!     if(impi/=impi0) allocate(str_massdc(str_nc))
+      if(impi==impi0) call getScatter(igeom,str_nc,str_massdc,
+     &     arr_reorder,arr_scatter)
       if(impi/=impi0) allocate(arr_scatter(str_nc))
       allocate(str_massdd(ncell))
 
@@ -442,8 +445,9 @@ c--   write(6,*) 'vol=',volume,'tasks=',tasks,'temp=',temp
       subroutine getScatter(igeom,arr_size,in_arr,in_order,out_arr)
       implicit none
       integer,intent(in)::igeom,arr_size
-      integer,dimension(:),intent(in)::in_arr,in_order
-      integer,dimension(:),allocatable,intent(out)::out_arr
+      real*8,dimension(:),intent(in)::in_arr
+      integer,dimension(:),intent(in)::in_order
+      real*8,dimension(:),allocatable,intent(out)::out_arr
       integer::i,idx
       write(6,*) ">>> before scatterv",igeom,str_nc
       allocate(out_arr(arr_size)) !allocate array to be scattered
