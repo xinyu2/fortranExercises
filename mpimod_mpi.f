@@ -272,6 +272,8 @@ c
       ny = ndim(2)
       nz = ndim(3)
 
+      write(6,*) '>> nx=',nx, 'ny=',ny,'nz=',nz
+
       if(impi==impi0) then
          edgelen=getedge(nmpi,ndim,igeom) ! cube edge's length
       endif
@@ -289,9 +291,15 @@ c-- calculate offsets
          select case(igeom)
          case(1,11) !arr_reorder=raw order(xyz)
          case(2)
-            call getCorners(nx,ny,edgelen,nboxes,corners)
-            call getReorder(nx,edgelen,nboxes,corners,arr_reorder)
+!           call getCorners(nx,ny,edgelen,nboxes,corners)
+!           call getReorder(nx,edgelen,nboxes,corners,arr_reorder)
+            call getCorners3d(igeom,nx,ny,nz,edgelen,nboxes,corners)
+            call getReorder3d(igeom,nx,ny,nz,edgelen,nboxes,corners,
+     &                        arr_reorder)
          case(3)
+            call getCorners3d(igeom,nx,ny,nz,edgelen,nboxes,corners)
+            call getReorder3d(igeom,nx,ny,nz,edgelen,nboxes,corners,
+     &                        arr_reorder)
          case default
             stop 'igeom invalid'
          endselect
@@ -378,7 +386,7 @@ c-- ye structure if available
       implicit none
       integer,intent(in) :: nmpi,ndim(3),igeom
       integer::l,nx,ny,nz,volume
-      real::tasks,temp
+      real*8::tasks,temp
 
       nx=ndim(1)
       ny=ndim(2)
@@ -387,14 +395,25 @@ c-- ye structure if available
       volume=nx*ny*nz
       tasks=nmpi+0.0
       temp=volume/tasks
+      write(6,*) '>> temp',temp
       if(igeom==2) then
          l=ceiling(temp**(1.0/2.0))
+         if (l*l*nmpi>volume) then
+            l=l-1               ! 2d l round up by 1 due to precision
+         endif
       else if(igeom==3) then
          l=ceiling(temp**(1.0/3.0))
+         if (l*l*l*nmpi>volume) then
+            l=l-1               ! 3d l round up by 1 due to precision
+         endif
       else
          l=ceiling(volume/tasks)
+         if (l*nmpi>volume) then
+            l=l-1               ! 1d l round up by 1 due to precision
+         endif
       endif
       getedge=l
+      write(6,*) '>> getEdge',l
       end function getedge
 
       subroutine getCorners(nx,ny,len,nboxes,pos)
@@ -415,6 +434,7 @@ c-- ye structure if available
          enddo                  !end x
       enddo                     !end y
       end subroutine getCorners
+
 
       subroutine getReorder(nx,len,nboxes,corners,arr_reorder)
       implicit none
@@ -437,6 +457,58 @@ c-- ye structure if available
          enddo
       enddo
       end subroutine getReorder
+
+      subroutine getCorners3d(igeom,nx,ny,nz,len,nboxes,pos)
+      implicit none
+      integer, intent(in)::igeom,nx,ny,nz,len
+      integer, intent(out)::nboxes
+      integer,dimension(:),allocatable,intent(out) :: pos
+      integer::i,j,k,cc,p,nodevol
+
+      nboxes=0
+      nodevol=getVolume(igeom,len)
+      cc=(nx*ny*nz)/nodevol ! number of processors
+      write(6,*) '>> corner > nv',nodevol,'igeom',igeom
+      allocate(pos(cc))
+      do k=1,nz,len
+         do j=1,ny,len
+            do i=1,nx,len
+               p=(k-1)*nx*ny+(j-1)*nx+i
+               nboxes=nboxes+1
+               pos(nboxes)=p
+            enddo               !end x
+         enddo                  !end y
+      enddo                     !end z
+      end subroutine getCorners3d
+
+      subroutine getReorder3d(igeom,nx,ny,nz,len,nboxes,corners,
+     &                        arr_reorder)
+      implicit none
+      integer,intent(in)::igeom,nx,ny,nz,len,nboxes
+      integer,dimension(:),intent(in)::corners
+      integer,dimension(:),allocatable,intent(out)::arr_reorder
+      integer::arr_size,i,j,k,l,m,idx,box_offset,nodevol
+      nodevol=getVolume(igeom,len)
+      arr_size=nodevol*nboxes ! total cells in domain
+
+      allocate(arr_reorder(arr_size))
+      box_offset=0
+      l=0                       !l should == arr_size
+      do m=1,nboxes
+         box_offset=corners(m)-corners(1)
+         do k=1,min(len,nz)
+            do j=1,len
+               do i=1,len
+                  l=l+1
+c--               write(6,*) '>> reorder m=',m,'k=',k,'j=',j,
+c-- &                       'i=',i,'l=',l
+                  idx=(k-1)*nx*ny+(j-1)*nx+i+box_offset
+                  arr_reorder(l)=idx
+               enddo            !end x
+            enddo               !end y
+         enddo                  !end z
+      enddo
+      end subroutine getReorder3d
 
       subroutine getScatter(igeom,arr_size,in_arr,in_order,out_arr)
       implicit none
@@ -481,6 +553,17 @@ c-- ye structure if available
       endif
       end subroutine getMassfrdc
 
+      integer function getVolume(igeom,len)
+      implicit none
+      integer,intent(in)::igeom,len
+      integer::v
+      if (igeom==2) then
+         v=len*len
+      else if(igeom==3) then
+         v=len*len*len
+      endif
+      getVolume=v
+      end function getVolume
       end subroutine scatter_inputstruct
 c
 c

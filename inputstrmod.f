@@ -59,7 +59,9 @@ c     ---------------------------!{{{
       if(allocated(str_massdc)) deallocate(str_massdc)
       if(allocated(str_massdd)) deallocate(str_massdd)
       if(str_nabund>0) then
-       deallocate(str_massfrdc,str_massfrdd)
+       if(allocated(str_massfrdc)) deallocate(str_massfrdc)
+       if(allocated(str_massfrdd)) deallocate(str_massfrdd)
+!      deallocate(str_massfrdc,str_massfrdd)
        if(allocated(str_abundlabl)) deallocate(str_abundlabl) !only on impi0
       endif
       str_nabund=0!}}}
@@ -114,11 +116,12 @@ c--         write(6,*) '>>> bad  nmpi',remainder
             stop '>>> nmpi difficult decomposition'
          endif
       case(3)
-         remainder=mod(((nx*ny*nz)/(nmpi+0d0))**(1.0/3.0),2d0)
+         remainder=mod(int(((nx*ny*nz)/(nmpi))**(1.0/3.0)),2)
          if(remainder==0) then
-c--         write(6,*) '>>> good nmpi',remainder
+            write(6,*) '>>> good nmpi',remainder
          else
-c--         write(6,*) '>>> bad  nmpi',remainder
+            write(6,*) '>>> bad  nmpi',((nx*ny*nz)/(nmpi+0.0))
+     &                  **(1.0/3.0),remainder
             stop '>>> nmpi difficult decomposition'
          endif
       case(11)
