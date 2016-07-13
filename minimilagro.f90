@@ -12,17 +12,18 @@ program minimilagro
   logical :: lmpi0 !true for the master rank
   integer :: impi !mpi rank
   integer :: nmpi !number of mpi tasks
-  integer :: ierr,it
+  integer :: ierr,it,i
   integer :: tsp_start,tsp_end !time step
   integer :: dsize !domain size(total cells=dimx*dimy*dimz)
   integer :: rsize !rank size(cells per rank=dimx*dimy*dimz/nmpi)
+
   type par
      integer :: x, y, z  ! coordinate
      integer :: dx,dy,dz ! delta coordinate
      integer :: r        ! mpi rank
      real*8  :: e        ! positive or negative energy
   end type par
-  type(par),allocatable,target :: pars(:)
+  type(par),allocatable,target :: pars(:),scattpars(:)
   type cell
      integer :: gid  ! global id
      integer :: rid  ! rank id
@@ -65,11 +66,23 @@ program minimilagro
   if(lmpi0) then
      call initParticles(nmpi,maxpars,pars)
      call domainDecompose(nmpi,dd,dsize,rsize)
-     call scatterParticles(nmpi,maxpars,pars,dd)
-     do it=tsp_start,tsp_end
-
-     enddo !tsp_it
+     call scatterParticles(nmpi,maxpars,pars,dd,scattpars)
+     do i=1,maxpars
+        write(6,*) '>',i,scattpars(i)%r
+     enddo
   endif
+  if(impi/=impi0) allocate(scattpars(maxpars))
+  allocate(str_massdd(ncell))
+
+!     call mpi_scatterv(str_massdc,counts,displs,MPI_REAL8,
+!     milagro dd: use arr_scatter replace str_massdc
+  call mpi_scatterv(arr_scatter,counts,displs,particletype,&
+  &        str_massdd,ncell,MPI_REAL8,&
+  &        impi0,MPI_COMM_WORLD,ierr)
+
+  do it=tsp_start,tsp_end
+
+  enddo !tsp_it
 !
 !
 !--
@@ -135,17 +148,17 @@ contains
     enddo
   end subroutine domainDecompose
 
-  subroutine scatterParticles(mpi_size,psize,pars,dd)
+  subroutine scatterParticles(mpi_size,psize,pars,dd,scattpars)
     implicit none
     integer,intent(in)::mpi_size
     integer,intent(in)::psize ! particle size
     type(par),dimension(:),intent(inout)::pars
     type(cell),dimension(:),intent(in) :: dd
     integer,dimension(:),allocatable :: counts,displ,offset
-    type(par),dimension(:),allocatable::scatter
+    type(par),dimension(:),allocatable,intent(out)::scattpars
     integer :: i,paridx,rankid,pointer
     allocate(counts(mpi_size),displ(mpi_size),offset(mpi_size))
-    allocate(scatter(psize))
+    allocate(scattpars(psize))
     do i=1,mpi_size
        counts(i)=0
        displ(i)=0
@@ -164,10 +177,7 @@ contains
        rankid=pars(i)%r
        pointer=displ(rankid+1)+offset(rankid+1)
        offset(rankid+1)=offset(rankid+1)+1
-       scatter(pointer)=pars(i)
-    enddo
-    do i=1,psize
-       write(6,*) '>',i,scatter(i)%r
+       scattpars(pointer)=pars(i)
     enddo
 
   end subroutine scatterParticles
