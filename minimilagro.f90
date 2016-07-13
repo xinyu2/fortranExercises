@@ -28,6 +28,9 @@ program minimilagro
      integer :: rid  ! rank id
   end type cell
   type(cell),dimension(:),allocatable,target :: dd ! reordered cell index
+  integer particletype, oldtypes(0:1)   ! required variables
+  integer blockcounts(0:1), offsets(0:1), extent
+
 !
 !-- mpi initialization
   call mpi_init(ierr) !MPI
@@ -36,6 +39,24 @@ program minimilagro
   lmpi0 = impi==impi0
   tsp_start = 1
   tsp_end   = 4
+
+  ! setup description of the 7 MPI_INTEGER fields x, y, z, dx, dy, dz, r
+  offsets(0) = 0
+  oldtypes(0) = MPI_INTEGER
+  blockcounts(0) = 7
+
+  ! setup description of the  MPI_REAL fields n, type
+  ! need to first figure offset by getting size of MPI_REAL
+  call MPI_TYPE_EXTENT(MPI_INTEGER, extent, ierr)
+  offsets(1) = 7 * extent
+  oldtypes(1) = MPI_REAL8
+  blockcounts(1) = 1
+
+  ! define structured type and commit it
+  call MPI_TYPE_STRUCT(2, blockcounts, offsets, oldtypes, &
+       particletype, ierr)
+  call MPI_TYPE_COMMIT(particletype, ierr)
+
 !
 !-- read and distribut input data
 !================================
@@ -61,6 +82,7 @@ program minimilagro
      write(6,*) 'milagro finished'
   endif
 
+  call MPI_TYPE_FREE(particletype, ierr)
   call mpi_finalize(ierr) !MPI
 
 contains
