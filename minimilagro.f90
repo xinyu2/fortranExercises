@@ -7,7 +7,7 @@ program minimilagro
 ! TODO and wishlist:
 !***********************************************************************
   integer,parameter :: impi0=0 !the master rank
-  integer,parameter :: maxpars=64,totalValue=0
+  integer,parameter :: maxpars=640,totalValue=0
   integer,parameter :: dimx=4,dimy=8,dimz=1
   logical :: lmpi0 !true for the master rank
   integer :: impi !mpi rank
@@ -15,9 +15,10 @@ program minimilagro
   integer :: ierr,it
   integer :: tsp_start,tsp_end
   type par
-     integer :: x, y, z
-     integer :: dx,dy,dz
-     real*8  :: value
+     integer :: x, y, z  ! coordinate
+     integer :: dx,dy,dz ! delta coordinate
+     real*8  :: energy   ! positive or negative
+     logical :: cmplt    ! flag for complete
   end type par
   type(par),allocatable,target :: pars(:)
 !
@@ -36,7 +37,7 @@ program minimilagro
   if(lmpi0) then
      call initParticles(nmpi,maxpars,pars)
      do it=tsp_start,tsp_end
-        write(6,*) 'iterate',it
+
      enddo !tsp_it
   endif
 !
@@ -59,18 +60,28 @@ contains
     integer,intent(in)::mpi_size,par_size
     type(par),dimension(:),allocatable,intent(out)::out_pars
     integer :: i
-    real*8  :: temp
+    real*8  :: temp,tot ! use tot to check sum of energy is zero
     allocate(out_pars(par_size))
+    tot=0
     call random_seed()
     do i=1,par_size
-       call random_number(temp)
-       out_pars(i)%x=int(temp*dimx)+1
-       call random_number(temp)
-       out_pars(i)%y=int(temp*dimy)+1
-       call random_number(temp)
-       out_pars(i)%z=int(temp*dimz)+1
-       write(6,*) 'x=',out_pars(i)%x,'y=',out_pars(i)%y,'z=',out_pars(i)%z
-    enddox
+      call random_number(temp)
+      out_pars(i)%x=int(temp*dimx)+1
+      call random_number(temp)
+      out_pars(i)%y=int(temp*dimy)+1
+      call random_number(temp)
+      out_pars(i)%z=int(temp*dimz)+1
+      if (i<par_size) then
+         call random_number(temp)
+         out_pars(i)%energy=temp*2-1
+         tot=tot+out_pars(i)%energy
+      else
+         out_pars(i)%energy=0-tot
+         tot=tot+out_pars(i)%energy
+         write(6,*) '>',i,'energy=',out_pars(i)%energy
+      endif
+    enddo
+    write(6,*) '>>',tot
   end subroutine initParticles
 
 end program minimilagro
