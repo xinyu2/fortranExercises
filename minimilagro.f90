@@ -16,6 +16,7 @@ program minimilagro
   integer :: tsp_start,tsp_end !time step
   integer :: dsize !domain size(total cells=dimx*dimy*dimz)
   integer :: rsize !rank size(cells per rank=dimx*dimy*dimz/nmpi)
+  integer :: parsub !subset of pars, particle per rank
 
   type par
      integer :: x, y, z  ! coordinate
@@ -23,12 +24,14 @@ program minimilagro
      integer :: r        ! mpi rank
      real*8  :: e        ! positive or negative energy
   end type par
-  type(par),allocatable,target :: pars(:),scattpars(:)
+  type(par),allocatable,target :: pars(:),scattpars(:),&
+       & ps(:)
   type cell
      integer :: gid  ! global id
      integer :: rid  ! rank id
   end type cell
   type(cell),dimension(:),allocatable,target :: dd ! reordered cell index
+  integer,dimension(:),allocatable :: counts,displs
   integer particletype, oldtypes(0:1)   ! required variables
   integer blockcounts(0:1), offsets(0:1), extent
 
@@ -66,20 +69,37 @@ program minimilagro
   if(lmpi0) then
      call initParticles(nmpi,maxpars,pars)
      call domainDecompose(nmpi,dd,dsize,rsize)
-     call scatterParticles(nmpi,maxpars,pars,dd,scattpars)
+     call scatterParticles(nmpi,maxpars,pars,dd,scattpars,&
+          &counts,displs)
      do i=1,maxpars
         write(6,*) '>',i,scattpars(i)%r
      enddo
+     do i=1,nmpi
+        write(6,*) '>>',counts(i),displs(i)
+     enddo
   endif
   if(impi/=impi0) allocate(scattpars(maxpars))
-  allocate(str_massdd(ncell))
+  !parsub=counts(impi)
+  allocate(ps(maxpars))
+  do i=1,maxpars
+     ps(i)%x=0
+     ps(i)%y=0
+     ps(i)%z=0
+     ps(i)%dx=0
+     ps(i)%dy=0
+     ps(i)%dz=0
+     ps(i)%r=0
+     ps(i)%e=0.0
+  enddo
 
-!     call mpi_scatterv(str_massdc,counts,displs,MPI_REAL8,
-!     milagro dd: use arr_scatter replace str_massdc
-  call mpi_scatterv(arr_scatter,counts,displs,particletype,&
-  &        str_massdd,ncell,MPI_REAL8,&
+  !if(impi==impi0) then
+  call mpi_scatterv(scattpars,counts,displs,particletype,&
+  &        ps,counts,particletype,&
   &        impi0,MPI_COMM_WORLD,ierr)
-
+  !endif
+  do i=1,maxpars
+     write(6,*) 'sc>>>',i,ps(i)%r
+  enddo
   do it=tsp_start,tsp_end
 
   enddo !tsp_it
@@ -148,20 +168,22 @@ contains
     enddo
   end subroutine domainDecompose
 
-  subroutine scatterParticles(mpi_size,psize,pars,dd,scattpars)
+  subroutine scatterParticles(mpi_size,psize,pars,dd,scattpars,&
+       & counts,displs)
     implicit none
     integer,intent(in)::mpi_size
     integer,intent(in)::psize ! particle size
     type(par),dimension(:),intent(inout)::pars
     type(cell),dimension(:),intent(in) :: dd
-    integer,dimension(:),allocatable :: counts,displ,offset
+    integer,dimension(:),allocatable,intent(out) :: counts,displs
+    integer,dimension(:),allocatable :: offset
     type(par),dimension(:),allocatable,intent(out)::scattpars
     integer :: i,paridx,rankid,pointer
-    allocate(counts(mpi_size),displ(mpi_size),offset(mpi_size))
+    allocate(counts(mpi_size),displs(mpi_size),offset(mpi_size))
     allocate(scattpars(psize))
     do i=1,mpi_size
        counts(i)=0
-       displ(i)=0
+       displs(i)=0
        offset(i)=0
     enddo
     do i=1,psize
@@ -169,17 +191,18 @@ contains
        pars(i)%r=dd(paridx)%rid
        counts(dd(paridx)%rid+1)=counts(dd(paridx)%rid+1)+1
     enddo
-    displ(1)=1
+    displs(1)=1
     do i=2,mpi_size
-       displ(i)=counts(i-1)+displ(i-1)
+       displs(i)=counts(i-1)+displs(i-1)
     enddo
     do i=1,psize
        rankid=pars(i)%r
-       pointer=displ(rankid+1)+offset(rankid+1)
+       pointer=displs(rankid+1)+offset(rankid+1)
        offset(rankid+1)=offset(rankid+1)+1
        scattpars(pointer)=pars(i)
     enddo
-
+    if(allocated(offset))then
+    endif
   end subroutine scatterParticles
 
   integer function getCoor(dim)
