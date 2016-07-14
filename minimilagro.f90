@@ -9,15 +9,31 @@ program minimilagro
   integer,parameter :: impi0=0 !the master rank
   integer,parameter :: maxpars=17,totalValue=0
   integer,parameter :: dimx=4,dimy=8,dimz=1
+  integer,parameter :: rmpbtag=5,rpctag=10,rftag=15
+  logical,parameter :: rmpb=.true. !receive max particle buffer
+  logical,parameter :: rpc =.true. !receive particle complete
+  logical,parameter :: rf  =.true. !receive finish
+
   logical :: lmpi0 !true for the master rank
   integer :: impi !mpi rank
   integer :: nmpi !number of mpi tasks
   integer :: ierr,it,i
   integer :: tsp_start,tsp_end !time step
+  !*********
+  !* domain
+  !*********
   integer :: dsize !domain size(total cells=dimx*dimy*dimz)
   integer :: rsize !rank size(cells per rank=dimx*dimy*dimz/nmpi)
   integer :: parsub !subset of pars, particle per rank
-
+  type cell
+     integer :: gid  ! global id
+     integer :: rid  ! rank id
+  end type cell
+  type(cell),dimension(:),allocatable,target :: dd ! reordered cell index
+  integer,dimension(:,:),allocatable :: nbrs !neighbor list for each rank
+  !***********
+  !* particle
+  !***********
   type par
      integer :: x, y, z  ! coordinate
      integer :: dx,dy,dz ! delta coordinate
@@ -25,12 +41,8 @@ program minimilagro
      integer  :: e        ! positive or negative energy
   end type par
   type(par),allocatable,target :: pars(:),scattpars(:),ps(:)
-  type cell
-     integer :: gid  ! global id
-     integer :: rid  ! rank id
-  end type cell
-  type(cell),dimension(:),allocatable,target :: dd ! reordered cell index
   integer,dimension(:),allocatable :: counts,displs
+
   integer particletype, oldtypes(0:1)   ! required variables
   integer blockcounts(0:1), offsets(0:1), extent
 
@@ -41,7 +53,7 @@ program minimilagro
   call mpi_comm_size(MPI_COMM_WORLD,nmpi,ierr) !MPI
   lmpi0 = impi==impi0
   tsp_start = 1
-  tsp_end   = 4
+  tsp_end   = 2
 
   ! setup description of the 7 MPI_INTEGER fields x, y, z, dx, dy, dz, r
   offsets(0) = 0
@@ -68,41 +80,46 @@ program minimilagro
   if(lmpi0) then
      call initParticles(nmpi,maxpars,pars)
      call domainDecompose(nmpi,dd,dsize,rsize)
+     !call getNeighbors(nmpi,nbrs)
      call scatterParticles(nmpi,maxpars,pars,dd,scattpars,&
           &counts,displs)
-     !do i=1,maxpars
-     !   write(6,*) '>',i,scattpars(i)%x,scattpars(i)%y,scattpars(i)%e
-     !enddo
+     !call printPars(impi0,scattpars)
      !do i=1,nmpi
      !   write(6,*) '>>',counts(i),displs(i)
      !enddo
   endif
+
+  call getNeighbors(nmpi,nbrs) ! everyone get its neighbor lists
+
   if(impi/=impi0) allocate(scattpars(maxpars))
 
   allocate(ps(maxpars))
-  do i=1,maxpars
-     ps(i)%x=0
-     ps(i)%y=0
-     ps(i)%z=0
-     ps(i)%dx=0
-     ps(i)%dy=0
-     ps(i)%dz=0
-     ps(i)%r=-1
-     ps(i)%e=0
-  enddo
+  call initPs(ps)
 
   call mpi_scatterv(scattpars,counts,displs,particletype,&
        &        ps,maxpars,particletype,&
        &        impi0,MPI_COMM_WORLD,ierr)
 
-  !if(impi==3)then
-  !   do i=1,maxpars
-  !      write(6,*) 'sc>>>',impi,'ps%i',ps(i)%x,ps(i)%y,ps(i)%e
-  !   enddo
-  !   write(6,*)
-  !endif
+  !call printPars(impi,ps)
   do it=tsp_start,tsp_end
+     write(6,*) '===> step ',it
 
+     call postRecvMaxParBuff(impi,nbrs)
+     if(impi==impi0) then
+        call postRecvParComplt
+     else
+        call postRecvFinish
+     endif
+
+
+     if(impi==impi0)then
+        call scatterParticles(nmpi,maxpars,pars,dd,scattpars,&
+             &counts,displs)
+     endif
+     call mpi_scatterv(scattpars,counts,displs,particletype,&
+       &        ps,maxpars,particletype,&
+       &        impi0,MPI_COMM_WORLD,ierr)
+     !call printPars(impi0,ps)
   enddo !tsp_it
 !
 !
@@ -111,6 +128,7 @@ program minimilagro
 !=============
 ! call mpi_barrier(MPI_COMM_WORLD,ierr) !MPI
 !-- Print timing output
+  call mpi_barrier(MPI_COMM_WORLD,ierr)
   if(lmpi0) then
      write(6,*)
      write(6,*) 'milagro finished'
@@ -206,6 +224,95 @@ contains
        deallocate(offset)
     endif
   end subroutine scatterParticles
+
+  subroutine printPars(myrank,ps)
+    implicit none
+    integer,intent(in)::myrank
+    type(par),dimension(:),intent(in)::ps
+    integer::i
+    if(impi==myrank)then
+       do i=1,maxpars
+          write(6,*) '>>>',impi,'x',ps(i)%x,'y',ps(i)%y,'e',ps(i)%e
+       enddo
+       write(6,*)
+    endif
+  end subroutine printPars
+
+  subroutine initPs(ps)
+    implicit none
+    type(par),dimension(:),intent(inout)::ps
+    integer::i
+    do i=1,maxpars
+       ps(i)%x=0
+       ps(i)%y=0
+       ps(i)%z=0
+       ps(i)%dx=0
+       ps(i)%dy=0
+       ps(i)%dz=0
+       ps(i)%r=-1
+       ps(i)%e=0
+    enddo
+  end subroutine initPs
+
+  subroutine getNeighbors(nmpi,nbrs)
+    implicit none
+    integer,intent(in)::nmpi
+    integer,dimension(:,:),intent(out),allocatable::nbrs
+    integer::i,j
+    allocate(nbrs(nmpi,nmpi-1))
+    !******************
+    !* initialize nbrs
+    !******************
+    do i=1,nmpi
+       do j=1,nmpi-1
+          nbrs(i,j)=-1
+       enddo
+    enddo
+    !********************
+    !* nbrs for strip-dd
+    !********************
+    nbrs(1,1)=1
+    nbrs(2,1)=0
+    nbrs(2,2)=2
+    nbrs(3,1)=1
+    nbrs(3,2)=3
+    nbrs(4,1)=2
+  end subroutine getNeighbors
+
+  subroutine postRecvMaxParBuff(myrank,nbrs)
+    implicit none
+    integer,intent(in)::myrank
+    integer,dimension(:,:),intent(in)::nbrs
+    integer::i,source
+
+    do i=1,nmpi-1
+       source=nbrs(myrank+1,i)
+       if(source>-1)then
+          call mpi_irecv(rmpb,1,MPI_LOGICAL,source,rmpbtag,&
+            & MPI_COMM_WORLD,ierr)
+          !write(6,*) 'prmpb>>',myrank,source
+       endif
+
+    enddo
+  end subroutine postRecvMaxParBuff
+
+  subroutine postRecvParComplt()
+    implicit none
+    integer::i,source
+    do i=1,nmpi-1
+       source=i
+       !call mpi_irecv(rpc,1,MPI_LOGICAL,source,rpctag,&
+       !     & MPI_COMM_WORLD,ierr)
+       write(6,*) 'prpc>>',source
+    enddo
+  end subroutine postRecvParComplt
+
+  subroutine postRecvFinish()
+    implicit none
+    call mpi_irecv(rf,1,MPI_LOGICAL,0,rftag,&
+         & MPI_COMM_WORLD,ierr)
+    write(6,*) 'prf>>',0
+  end subroutine postRecvFinish
 
   integer function getCoor(dim)
     implicit none
