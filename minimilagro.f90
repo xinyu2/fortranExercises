@@ -24,8 +24,7 @@ program minimilagro
      integer :: r        ! mpi rank
      real*8  :: e        ! positive or negative energy
   end type par
-  type(par),allocatable,target :: pars(:),scattpars(:),&
-       & ps(:)
+  type(par),allocatable,target :: pars(:),scattpars(:),ps(:)
   type cell
      integer :: gid  ! global id
      integer :: rid  ! rank id
@@ -72,14 +71,14 @@ program minimilagro
      call scatterParticles(nmpi,maxpars,pars,dd,scattpars,&
           &counts,displs)
      do i=1,maxpars
-        write(6,*) '>',i,scattpars(i)%r
+        write(6,*) '>',i,scattpars(i)%x,scattpars(i)%y,scattpars(i)%e
      enddo
-     do i=1,nmpi
-        write(6,*) '>>',counts(i),displs(i)
-     enddo
+     !do i=1,nmpi
+     !   write(6,*) '>>',counts(i),displs(i)
+     !enddo
   endif
   if(impi/=impi0) allocate(scattpars(maxpars))
-  !parsub=counts(impi)
+
   allocate(ps(maxpars))
   do i=1,maxpars
      ps(i)%x=0
@@ -88,18 +87,20 @@ program minimilagro
      ps(i)%dx=0
      ps(i)%dy=0
      ps(i)%dz=0
-     ps(i)%r=0
+     ps(i)%r=-1
      ps(i)%e=0.0
   enddo
 
-  !if(impi==impi0) then
   call mpi_scatterv(scattpars,counts,displs,particletype,&
-  &        ps,counts,particletype,&
-  &        impi0,MPI_COMM_WORLD,ierr)
-  !endif
-  do i=1,maxpars
-     write(6,*) 'sc>>>',i,ps(i)%r
-  enddo
+       &        ps,maxpars,particletype,&
+       &        impi0,MPI_COMM_WORLD,ierr)
+
+  if(impi==1)then
+     do i=1,maxpars
+        write(6,*) 'sc>>>',impi,'ps%i',ps(i)%x,ps(i)%y,ps(i)%e
+     enddo
+     write(6,*)
+  endif
   do it=tsp_start,tsp_end
 
   enddo !tsp_it
@@ -191,17 +192,18 @@ contains
        pars(i)%r=dd(paridx)%rid
        counts(dd(paridx)%rid+1)=counts(dd(paridx)%rid+1)+1
     enddo
-    displs(1)=1
+    displs(1)=0
     do i=2,mpi_size
        displs(i)=counts(i-1)+displs(i-1)
     enddo
     do i=1,psize
        rankid=pars(i)%r
-       pointer=displs(rankid+1)+offset(rankid+1)
        offset(rankid+1)=offset(rankid+1)+1
+       pointer=displs(rankid+1)+offset(rankid+1)
        scattpars(pointer)=pars(i)
     enddo
     if(allocated(offset))then
+       deallocate(offset)
     endif
   end subroutine scatterParticles
 
