@@ -22,7 +22,7 @@ program minimilagro
      integer :: x, y, z  ! coordinate
      integer :: dx,dy,dz ! delta coordinate
      integer :: r        ! mpi rank
-     real*8  :: e        ! positive or negative energy
+     integer  :: e        ! positive or negative energy
   end type par
   type(par),allocatable,target :: pars(:),scattpars(:),ps(:)
   type cell
@@ -52,7 +52,7 @@ program minimilagro
   ! need to first figure offset by getting size of MPI_REAL
   call MPI_TYPE_EXTENT(MPI_INTEGER, extent, ierr)
   offsets(1) = 7 * extent
-  oldtypes(1) = MPI_REAL8
+  oldtypes(1) = MPI_INTEGER !MPI_REAL8
   blockcounts(1) = 1
 
   ! define structured type and commit it
@@ -88,7 +88,7 @@ program minimilagro
      ps(i)%dy=0
      ps(i)%dz=0
      ps(i)%r=-1
-     ps(i)%e=0.0
+     ps(i)%e=0
   enddo
 
   call mpi_scatterv(scattpars,counts,displs,particletype,&
@@ -125,7 +125,7 @@ contains
     integer,intent(in)::mpi_size,size
     type(par),dimension(:),allocatable,intent(out)::pars
     integer :: i
-    real*8  :: temp,tot ! use tot to check sum of energy is zero
+    integer  :: temp,tot ! use tot to check sum of energy is zero
     allocate(pars(size))
     tot=0
     call random_seed()
@@ -217,11 +217,12 @@ contains
     getCoor=c
   end function getCoor
 
-  real*8 function getEnergy()
+  integer function getEnergy()
     implicit none
-    real*8  :: temp, e
+    real*8   :: temp
+    integer  :: e
     call random_number(temp)
-    e=temp*2-1
+    e=(temp*2-1)*10
     getEnergy=e
   end function getEnergy
 
