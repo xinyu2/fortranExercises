@@ -70,9 +70,9 @@ program minimilagro
      call domainDecompose(nmpi,dd,dsize,rsize)
      call scatterParticles(nmpi,maxpars,pars,dd,scattpars,&
           &counts,displs)
-     do i=1,maxpars
-        write(6,*) '>',i,scattpars(i)%x,scattpars(i)%y,scattpars(i)%e
-     enddo
+     !do i=1,maxpars
+     !   write(6,*) '>',i,scattpars(i)%x,scattpars(i)%y,scattpars(i)%e
+     !enddo
      !do i=1,nmpi
      !   write(6,*) '>>',counts(i),displs(i)
      !enddo
@@ -95,12 +95,12 @@ program minimilagro
        &        ps,maxpars,particletype,&
        &        impi0,MPI_COMM_WORLD,ierr)
 
-  if(impi==1)then
-     do i=1,maxpars
-        write(6,*) 'sc>>>',impi,'ps%i',ps(i)%x,ps(i)%y,ps(i)%e
-     enddo
-     write(6,*)
-  endif
+  !if(impi==3)then
+  !   do i=1,maxpars
+  !      write(6,*) 'sc>>>',impi,'ps%i',ps(i)%x,ps(i)%y,ps(i)%e
+  !   enddo
+  !   write(6,*)
+  !endif
   do it=tsp_start,tsp_end
 
   enddo !tsp_it
