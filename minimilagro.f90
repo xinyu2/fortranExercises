@@ -10,9 +10,10 @@ program minimilagro
   integer,parameter :: maxpars=17,totalValue=0
   integer,parameter :: dimx=4,dimy=8,dimz=1
   integer,parameter :: rmpbtag=5,rpctag=10,rftag=15
-  logical,parameter :: rmpb=.true. !receive max particle buffer
-  logical,parameter :: rpc =.true. !receive particle complete
-  logical,parameter :: rf  =.true. !receive finish
+
+  integer :: maxbsize   ! max particle buffer size
+  integer :: parcmplt   ! number of particle complete on slaves
+  logical :: glbfinsh   ! global finish tag
 
   logical :: lmpi0 !true for the master rank
   integer :: impi !mpi rank
@@ -53,7 +54,7 @@ program minimilagro
   call mpi_comm_size(MPI_COMM_WORLD,nmpi,ierr) !MPI
   lmpi0 = impi==impi0
   tsp_start = 1
-  tsp_end   = 2
+  tsp_end   = 1
 
   ! setup description of the 7 MPI_INTEGER fields x, y, z, dx, dy, dz, r
   offsets(0) = 0
@@ -288,9 +289,9 @@ contains
     do i=1,nmpi-1
        source=nbrs(myrank+1,i)
        if(source>-1)then
-          call mpi_irecv(rmpb,1,MPI_LOGICAL,source,rmpbtag,&
+          call mpi_irecv(maxbsize,1,MPI_INTEGER,source,rmpbtag,&
             & MPI_COMM_WORLD,ierr)
-          !write(6,*) 'prmpb>>',myrank,source
+          !write(*,*) 'prmpb>>',myrank,source
        endif
 
     enddo
@@ -301,17 +302,17 @@ contains
     integer::i,source
     do i=1,nmpi-1
        source=i
-       !call mpi_irecv(rpc,1,MPI_LOGICAL,source,rpctag,&
-       !     & MPI_COMM_WORLD,ierr)
-       write(6,*) 'prpc>>',source
+       call mpi_irecv(parcmplt,1,MPI_INTEGER,source,rpctag,&
+            & MPI_COMM_WORLD,ierr)
+       !write(6,*) 'prpc>>',source
     enddo
   end subroutine postRecvParComplt
 
   subroutine postRecvFinish()
     implicit none
-    call mpi_irecv(rf,1,MPI_LOGICAL,0,rftag,&
-         & MPI_COMM_WORLD,ierr)
-    write(6,*) 'prf>>',0
+    !call mpi_irecv(rf,1,MPI_LOGICAL,0,rftag,&
+    !     & MPI_COMM_WORLD,ierr)
+    !write(6,*) 'prf>>',0
   end subroutine postRecvFinish
 
   integer function getCoor(dim)

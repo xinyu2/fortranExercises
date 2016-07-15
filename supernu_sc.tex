@@ -1,0 +1,212 @@
+\documentclass[a0]{a0poster}
+
+\pagestyle{empty}
+\setcounter{secnumdepth}{0}
+
+\usepackage[vlined]{algorithm2e}
+\usepackage{calc}
+\usepackage{url}
+\usepackage{relsize}
+\usepackage{multirow}
+\usepackage{booktabs}
+
+\usepackage{graphicx}
+\usepackage{multicol}
+\usepackage[T1]{fontenc}
+\usepackage{ae}
+\usepackage[absolute]{textpos}
+\usepackage{subfigure}
+\usepackage{graphicx,wrapfig,times}
+\usepackage{float}
+\DeclareGraphicsExtensions{.pdf}
+
+\usepackage{amssymb}
+\usepackage{amsmath,amsfonts}
+
+\usepackage{color}
+\definecolor{DarkBlue}{rgb}{0.1,0.1,0.5}
+\definecolor{Red}{rgb}{0.9,0.0,0.1}
+
+\definecolor{LightBlue}{RGB}{17,17,87}
+
+\setlength{\paperwidth}{100cm}
+\setlength{\paperheight}{75cm}
+
+\let\Textsize\normalsize
+\def\Head#1{\noindent\hbox to \hsize{\hfil{\LARGE\color{DarkBlue} #1}}\bigskip}
+\def\LHead#1{\noindent{\LARGE\color{DarkBlue} #1}\bigskip}
+\def\Subhead#1{\noindent{\large\color{DarkBlue} #1}\bigskip}
+\def\Title#1{\noindent{\VeryHuge\color{LightBlue} #1}}
+
+\TPGrid[55mm,50mm]{20}{11}      % 3 cols of width 7, plus 2 gaps width 1
+
+\parindent=0pt
+\parskip=0.5\baselineskip
+
+\newcommand\x{30}
+\newcommand\y{50}
+
+\begin{document}
+
+\begin{center}
+\Title{Enhancing SuperNu through Improved Domain Decomposition}\\
+\vspace{1cm}
+
+\LHead{\textbf{X. Chen}, \textbf{D. Huff} , \textbf{P. Karpov}, R. Wollaeger, G. Rockefeller, B. Krueger 
+\hfill \\
+\small{Los Alamos National Laboratory}}
+
+\end{center}
+
+\begin{textblock}{3}(22,0)
+\vspace{-14mm}
+\begin{figure}[H]
+\hspace{-5.5mm}
+%\includegraphics[width=0.52\textwidth]{images/70th-color-lg.pdf}
+\end{figure}
+\end{textblock}
+
+\begin{textblock}{3}(22.1,0.25)
+LA-UR-13-25315
+\end{textblock}
+
+\begin{textblock}{7.5}(0,0.7)
+\hrule
+\Head{Abstract}
+
+\textit{
+SuperNu{\small[1]} is a radiation transport code to simulate light curves of explosive outflows from supernovae. Improvements were made to the current decomposition of the opacity calculation using recursive coordinate bisection approach	, and the decomposition was expanded to the rest of the simulation. We explored various methods to reduce the memory footprint and improve scalability of the transport step for domain decomposed implicit Monte Carlo. In this poster we demonstrate the results of the Improved KULL and Improved Milagro algorithms {\small[2]}. The figures compare the results from a large range of MPI ranks on LANL\'s local clusters and the Blue Waters supercomputer. Finally, we tested the scalability of SuperNu{\small[1]} on the latest Intel Xeon Phi architecture, Knights Landing.
+}
+\end{textblock}
+
+\begin{textblock}{7.5}(0,3.2)
+%\hrule
+\Head{What is SuperNu?}
+
+
+Fig.\ref{fg:lightcurve} is the best shit eva
+ %width = 0.33\textwidth, trim=1cm 2cm 6cm 1.5cm, clip=true
+\begin{figure}[H]
+\begin{center}
+\includegraphics[width =0.7\textwidth]{light_curve.png}\\
+%\small{R.T. Wollaeger, D. R. van Rossum. ApJ. 214 (2014) 28}
+\caption{Radiation Transport for Explosive Outflows: Opacity Regrouping{\small[1]}}
+\label{fg:lightcurve}
+\end{center}
+\end{figure}
+
+\end{textblock}
+
+\begin{textblock}{7.5}(0,8.5)
+%\hrule
+
+\Head{Domain Decomposition}
+
+The spatial domain is decomposed into geometrically consecutive squares or cubes. Under such decomposition, each MPI rank can have the particles reacting within their spatial neighborhood instead of the whole background domain. Hence the SuperNu simulation can avoid the memory limit and run with bigger spatial setups or finer resolutions.\\
+
+Our domain decomposition method is based on the recursive coordinate bisection algorithm. 
+ \begin{figure}[H]
+ \begin{center}
+ \includegraphics[width=0.7\textwidth]{rcb.png}
+ \caption{A example of the recursive coordinate bisection}
+ \end{center}
+ \label{fg:rcb}
+ \end{figure}
+
+
+
+\end{textblock}
+
+\begin{textblock}{7.5}(8,0.7)
+\hrule
+
+\begin{figure}[H]
+ \begin{center}
+ \includegraphics[width=0.85\textwidth]{quilt.jpg}
+ \caption{Decompose 32 by 64 domain cells onto 16 mpi ranks}
+ \end{center}
+ \label{fg:quilt}
+ \end{figure}
+
+
+\Head{Improved Milagro miniapp}
+\begin{figure}[H]
+ \begin{center}
+ \includegraphics[width=0.75\textwidth]{milagro.png}
+ \caption{binary tree communication pattern of Improved Milagro{\small[2]}}
+ \end{center}
+ \label{fg:milagro_tree}
+ \end{figure}
+
+
+\Head{Improved KULL  miniapp}
+\begin{figure}[H]
+ \begin{center}
+ \includegraphics[width=0.4\textwidth]{KULL.png}
+ \caption{non-blocking message passing for Improved KULL{\small[2]}}
+ \end{center}
+ \label{fg:particle_avg}
+ \end{figure}
+
+
+
+
+\end{textblock}
+
+\begin{textblock}{7.5}(16,0.7)
+\hrule
+\Head{Benchmarks}
+
+
+ \begin{figure}[H]
+ \begin{center}
+ \includegraphics[width=0.6\textwidth]{Partical_avg.png}
+ \end{center}
+ \label{fg:particle_avg}
+ \end{figure}
+
+ \begin{figure}[H]
+ \begin{center}
+ \includegraphics[width=0.6\textwidth]{Partical_Chart_avg.png}
+ \end{center}
+ \label{fg:particle_chart_avg}
+\caption{benchmarking superNu performance on LANL's cluster}
+ \end{figure}
+ 
+
+\end{textblock}
+
+\begin{textblock}{7.5}(16,6.5)
+%\hrule
+\Head{Knights Landing}
+This is the superNu simulation on LANL's wolf cluster. We will replace it with result from simulations on Knights Landing later.\\
+ \begin{figure}[H]
+ \begin{center}
+ \includegraphics[width=0.6\textwidth]{Partical_avg.png}
+ \end{center}
+ \label{fg:particle_avg}
+ \caption{performance on Knights Landing}
+ \end{figure}
+ 
+
+\end{textblock}
+
+\begin{textblock}{7.5}(16,10.5)
+
+%\hrule
+\Head{Conclusion}
+The domain decomposition method based on recursive coordinate bisection algorithm helps the superNu to simulate on larger domains. The Improved Milagro and Improved KULL algorithm explore the non-blocking message passing techniques in Monte Carlo simulations and hence improve the parallel performance. The said methods are tested on LANL's local clusters as well as the newest supercomputer with Knights Landing architecture.\\    
+
+
+\end{textblock}
+
+\begin{textblock}{7.6}(16,12.5)
+\Head{References}
+[1]Wollaeger et al. 2013, ApJS 209, 37,  
+[2]Brunner et al, 2006, JCoPH .212..527B
+\bigskip
+\end{textblock}
+
+
+
+\end{document}
