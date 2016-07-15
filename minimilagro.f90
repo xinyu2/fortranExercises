@@ -12,8 +12,9 @@ program minimilagro
   integer,parameter :: rmpbtag=5,rpctag=10,rftag=15
 
   integer :: maxbsize   ! max particle buffer size
-  integer :: parcmplt   ! number of particle complete on slaves
-  logical :: glbfinsh   ! global finish tag
+  integer,dimension(:),allocatable :: parcmplt ! ->
+  ! <- number of particle complete on slaves
+  logical,dimension(:),allocatable :: glbfinsh   ! global finish tag
 
   logical :: lmpi0 !true for the master rank
   integer :: impi !mpi rank
@@ -106,6 +107,8 @@ program minimilagro
      write(6,*) '===> step ',it
 
      call postRecvMaxParBuff(impi,nbrs)
+     allocate(parcmplt(nmpi-1))
+     allocate(glbfinsh(nmpi-1))
      if(impi==impi0) then
         call postRecvParComplt
      else
@@ -302,7 +305,7 @@ contains
     integer::i,source
     do i=1,nmpi-1
        source=i
-       call mpi_irecv(parcmplt,1,MPI_INTEGER,source,rpctag,&
+       call mpi_irecv(parcmplt(i),1,MPI_INTEGER,source,rpctag,&
             & MPI_COMM_WORLD,ierr)
        !write(6,*) 'prpc>>',source
     enddo
@@ -310,9 +313,12 @@ contains
 
   subroutine postRecvFinish()
     implicit none
-    !call mpi_irecv(rf,1,MPI_LOGICAL,0,rftag,&
-    !     & MPI_COMM_WORLD,ierr)
-    !write(6,*) 'prf>>',0
+    integer::i
+    do i=1,nmpi-1
+       call mpi_irecv(glbfinsh(i),1,MPI_LOGICAL,0,rftag,&
+            & MPI_COMM_WORLD,ierr)
+       !write(6,*) 'prf>>',0
+    enddo
   end subroutine postRecvFinish
 
   integer function getCoor(dim)
