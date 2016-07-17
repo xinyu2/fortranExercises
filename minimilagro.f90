@@ -11,22 +11,22 @@ program minimilagro
   integer,parameter :: dimx=4,dimy=8,dimz=1
   integer,parameter :: rmpbtag=5,rpctag=10,rftag=15
 
-  integer :: maxbsize   ! max particle buffer size
-  integer,dimension(:),allocatable :: parcmplt ! ->
-  ! <- number of particle complete on slaves
-  logical,dimension(:),allocatable :: glbfinsh   ! global finish tag
+  integer,dimension(:),allocatable :: maxbfsize  ! max particle buffer size
+  integer,dimension(:),allocatable :: pcomplete  ! number of particle complete on slaves
+  logical,dimension(:),allocatable :: glbfinish  ! global finish tag
 
   logical :: lmpi0 !true for the master rank
   integer :: impi !mpi rank
   integer :: nmpi !number of mpi tasks
-  integer :: ierr,it,i
+  integer :: ierr,it
+  integer,dimension(:),allocatable :: req
   integer :: tsp_start,tsp_end !time step
   !*********
   !* domain
   !*********
   integer :: dsize !domain size(total cells=dimx*dimy*dimz)
   integer :: rsize !rank size(cells per rank=dimx*dimy*dimz/nmpi)
-  integer :: parsub !subset of pars, particle per rank
+  !integer :: parsub !subset of pars, particle per rank
   type cell
      integer :: gid  ! global id
      integer :: rid  ! rank id
@@ -74,13 +74,22 @@ program minimilagro
        particletype, ierr)
   call MPI_TYPE_COMMIT(particletype, ierr)
 
+  !********************
+  !* allocate arrays
+  !********************
+  allocate(pcomplete(nmpi-1))
+  allocate(glbfinish(nmpi-1))
+  allocate(maxbfsize(nmpi-1))
+  allocate(req(nmpi-1))
+  allocate(counts(nmpi))
+  allocate(displs(nmpi))
 !
 !-- read and distribut input data
 !================================
 !-- this is done by the master task only and then broadcasted
 !
   if(lmpi0) then
-     call initParticles(nmpi,maxpars,pars)
+     call initParticles(maxpars,pars)
      call domainDecompose(nmpi,dd,dsize,rsize)
      !call getNeighbors(nmpi,nbrs)
      call scatterParticles(nmpi,maxpars,pars,dd,scattpars,&
@@ -107,10 +116,9 @@ program minimilagro
      write(6,*) '===> step ',it
 
      call postRecvMaxParBuff(impi,nbrs)
-     allocate(parcmplt(nmpi-1))
-     allocate(glbfinsh(nmpi-1))
+
      if(impi==impi0) then
-        call postRecvParComplt
+        call postRecvParComplete
      else
         call postRecvFinish
      endif
@@ -124,6 +132,8 @@ program minimilagro
        &        ps,maxpars,particletype,&
        &        impi0,MPI_COMM_WORLD,ierr)
      !call printPars(impi0,ps)
+
+
   enddo !tsp_it
 !
 !
@@ -139,12 +149,25 @@ program minimilagro
   endif
 
   call MPI_TYPE_FREE(particletype, ierr)
+
+  !********************
+  !* deallocate arrays
+  !********************
+  if(allocated(pcomplete)) deallocate(pcomplete)
+  if(allocated(glbfinish)) deallocate(glbfinish)
+  if(allocated(req)) deallocate(req)
+  if(allocated(maxbfsize)) deallocate(maxbfsize)
+  if(allocated(counts)) deallocate(counts)
+  if(allocated(displs)) deallocate(displs)
+
   call mpi_finalize(ierr) !MPI
 
+
+
 contains
-  subroutine initParticles(mpi_size,size,pars)
+  subroutine initParticles(size,pars)
     implicit none
-    integer,intent(in)::mpi_size,size
+    integer,intent(in)::size
     type(par),dimension(:),allocatable,intent(out)::pars
     integer :: i
     integer  :: temp,tot ! use tot to check sum of energy is zero
@@ -178,7 +201,7 @@ contains
     type(cell),dimension(:),intent(out),allocatable :: dd
     integer,intent(out) :: v ! volume, domain size, number of cells
     integer,intent(out) :: c ! cells per rank
-    integer :: i,j,k,idx
+    integer :: i!,j,k,idx
     v = dimx*dimy*dimz
     c = v/mpi_size
     allocate(dd(v))
@@ -292,32 +315,31 @@ contains
     do i=1,nmpi-1
        source=nbrs(myrank+1,i)
        if(source>-1)then
-          call mpi_irecv(maxbsize,1,MPI_INTEGER,source,rmpbtag,&
-            & MPI_COMM_WORLD,ierr)
-          !write(*,*) 'prmpb>>',myrank,source
+          call mpi_irecv(maxbfsize(i),1,MPI_INTEGER,source,rmpbtag,&
+            & MPI_COMM_WORLD,req(i),ierr)
+          write(*,*) 'prmpb>>',myrank,source
        endif
-
     enddo
   end subroutine postRecvMaxParBuff
 
-  subroutine postRecvParComplt()
+  subroutine postRecvParComplete()
     implicit none
     integer::i,source
     do i=1,nmpi-1
        source=i
-       call mpi_irecv(parcmplt(i),1,MPI_INTEGER,source,rpctag,&
-            & MPI_COMM_WORLD,ierr)
-       !write(6,*) 'prpc>>',source
+       call mpi_irecv(pcomplete(i),1,MPI_INTEGER,source,rpctag,&
+            & MPI_COMM_WORLD,req(i),ierr)
+       write(6,*) 'par complete size>>',pcomplete(i)
     enddo
-  end subroutine postRecvParComplt
+  end subroutine postRecvParComplete
 
   subroutine postRecvFinish()
     implicit none
     integer::i
     do i=1,nmpi-1
-       call mpi_irecv(glbfinsh(i),1,MPI_LOGICAL,0,rftag,&
-            & MPI_COMM_WORLD,ierr)
-       !write(6,*) 'prf>>',0
+       call mpi_irecv(glbfinish(i),1,MPI_LOGICAL,0,rftag,&
+            & MPI_COMM_WORLD,req(i),ierr)
+       write(6,*) 'global finish>>',glbfinish(i)
     enddo
   end subroutine postRecvFinish
 
@@ -336,7 +358,7 @@ contains
     real*8   :: temp
     integer  :: e
     call random_number(temp)
-    e=(temp*2-1)*10
+    e=INT((temp*2-1)*10)
     getEnergy=e
   end function getEnergy
 
