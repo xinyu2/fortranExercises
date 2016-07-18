@@ -7,13 +7,14 @@ program minimilagro
 ! TODO and wishlist:
 !***********************************************************************
   integer,parameter :: impi0=0 !the master rank
-  integer,parameter :: maxpars=17,totalValue=0
+  integer,parameter :: maxpars=17
   integer,parameter :: dimx=4,dimy=8,dimz=1
   integer,parameter :: rmpbtag=5,rpctag=10,rftag=15
 
-  integer,dimension(:),allocatable :: maxbfsize  ! max particle buffer size
-  integer,dimension(:),allocatable :: pcomplete  ! number of particle complete on slaves
-  logical,dimension(:),allocatable :: glbfinish  ! global finish tag
+  integer,dimension(:),allocatable :: maxbfsize  ! max particle buffer size on each ranks
+  integer,dimension(:),allocatable :: pcomplete  ! array for number of particle complete on master
+  logical :: globalFinish  ! global finish tag on slaves
+  integer :: pcmpl         ! number of particle complete on each slave
 
   logical :: lmpi0 !true for the master rank
   integer :: impi !mpi rank
@@ -42,12 +43,20 @@ program minimilagro
      integer :: r        ! mpi rank
      integer  :: e        ! positive or negative energy
   end type par
-  type(par),allocatable,target :: pars(:),scattpars(:),ps(:)
+  !***********************************************************************
+  !*pars:       init total particles
+  !*scattpars : reorder particles to be scattered to all ranks
+  !*ps:         subset of particles on each rank
+  !*pbuff:      subset of particles that need transfer(hit rank boundary)
+  !***********************************************************************
+  type(par),allocatable,target :: pars(:),scattpars(:),ps(:),pbuff(:)
+
   integer,dimension(:),allocatable :: counts,displs
   integer ::ttlPars   ! number of total particles, reduced to master
   integer ::subPars   ! number of particles scattered to each slave
   integer ::ttlEnergy ! total energy, reduced to master
   integer ::subEnergy ! subtotal of energy scattered to each slave
+  logical ::existLocalPar ! exist local active particles
 
   integer particletype, oldtypes(0:1)   ! required variables
   integer blockcounts(0:1), offsets(0:1), extent
@@ -128,6 +137,10 @@ program minimilagro
      call reduceTotalPars ! check total number of praticles on master
      if (impi==impi0) then
         write(6,*) 'after reduce>',ttlPars,ttlEnergy
+     endif
+     existLocalPar=getExistLocalPar(ps)
+     if (existLocalPar.eqv..TRUE.) then
+        call movePar(ps)
      endif
   enddo !tsp_it
 !
@@ -328,9 +341,9 @@ contains
     implicit none
     integer::i
     do i=1,nmpi-1
-       call mpi_irecv(glbfinish(i),1,MPI_LOGICAL,0,rftag,&
+       call mpi_irecv(globalFinish,1,MPI_LOGICAL,0,rftag,&
             & MPI_COMM_WORLD,req(i),ierr)
-       !write(6,*) 'global finish>>',glbfinish(i)
+       !write(6,*) 'global finish>>',globalFinish
     enddo
   end subroutine postRecvFinish
 
@@ -344,12 +357,10 @@ contains
     implicit none
     integer::i
     allocate(pcomplete(nmpi-1))
-    allocate(glbfinish(nmpi-1))
     allocate(maxbfsize(nmpi-1))
     allocate(req(nmpi-1))
     do i=1,nmpi-1
        pcomplete(i)=0
-       glbfinish=.false.
        maxbfsize(i)=0
     enddo
     allocate(counts(nmpi))
@@ -363,13 +374,25 @@ contains
   subroutine freeArrays()
     implicit none
     if(allocated(pcomplete)) deallocate(pcomplete)
-    if(allocated(glbfinish)) deallocate(glbfinish)
     if(allocated(req)) deallocate(req)
     if(allocated(maxbfsize)) deallocate(maxbfsize)
     if(allocated(counts)) deallocate(counts)
     if(allocated(displs)) deallocate(displs)
     if(allocated(ps)) deallocate(ps)
   end subroutine freeArrays
+
+  subroutine movePar(ps)
+    implicit none
+    type(par),dimension(:),intent(in)::ps
+    integer :: dir  ! x:0, y:1, z:2
+    integer :: step ! -1, 0 , +1
+    do i=1,maxpars
+       if(ps(i)%r/=-1) then
+          dir=getDirection()
+          step=getStep()
+       endif
+    enddo
+  end subroutine movePar
 
   integer function getCoor(dim)
     implicit none
@@ -392,7 +415,7 @@ contains
 
   integer function getSubPars(ps)
     implicit none
-    type(par),dimension(:),intent(inout)::ps
+    type(par),dimension(:),intent(in)::ps
     integer::i,s
     s=0
     do i=1,maxpars
@@ -405,7 +428,7 @@ contains
 
   integer function getSubEnergy(ps)
     implicit none
-    type(par),dimension(:),intent(inout)::ps
+    type(par),dimension(:),intent(in)::ps
     integer::i,e
     e=0
     do i=1,maxpars
@@ -415,6 +438,44 @@ contains
     enddo
     getSubEnergy=e
   end function getSubEnergy
+
+  logical function getExistLocalPar(ps)
+    implicit none
+    type(par),dimension(:),intent(in)::ps
+    integer::i,s
+    logical::l
+    s=0
+    l=.FALSE.
+    do i=1,maxpars
+       if(ps(i)%r/=-1) then
+          s=s+1
+       endif
+    enddo
+    if(s/=0) then
+       l=.TRUE.
+    endif
+    getExistLocalPar=l
+  end function getExistLocalPar
+
+  integer function getDirection()
+    implicit none
+    real*8   :: temp
+    integer  :: d
+    call random_number(temp)
+    d=INT(temp*2)
+    getDirection=d
+    write(6,*) 'dir>',d
+  end function getDirection
+
+  integer function getStep()
+    implicit none
+    real*8   :: temp
+    integer  :: s
+    call random_number(temp)
+    s=INT(temp*2-1)
+    getStep=s
+    write(6,*) 'step>',s
+  end function getStep
 
 end program minimilagro
 ! vim: fdm=marker
