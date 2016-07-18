@@ -18,7 +18,7 @@ program minimilagro
   logical :: lmpi0 !true for the master rank
   integer :: impi !mpi rank
   integer :: nmpi !number of mpi tasks
-  integer :: ierr,it
+  integer :: ierr,it,i
   integer,dimension(:),allocatable :: req
   integer :: tsp_start,tsp_end !time step
   !*********
@@ -44,10 +44,17 @@ program minimilagro
   end type par
   type(par),allocatable,target :: pars(:),scattpars(:),ps(:)
   integer,dimension(:),allocatable :: counts,displs
+  integer ::ttlPars   ! number of total particles, reduced to master
+  integer ::subPars   ! number of particles scattered to each slave
+  integer ::ttlEnergy ! total energy, reduced to master
+  integer ::subEnergy ! subtotal of energy scattered to each slave
 
   integer particletype, oldtypes(0:1)   ! required variables
   integer blockcounts(0:1), offsets(0:1), extent
 
+  !********************
+  !* mpi setups
+  !********************
 !
 !-- mpi initialization
   call mpi_init(ierr) !MPI
@@ -56,7 +63,9 @@ program minimilagro
   lmpi0 = impi==impi0
   tsp_start = 1
   tsp_end   = 1
-
+  !**************************************
+  !* mpi structure for passing particles
+  !**************************************
   ! setup description of the 7 MPI_INTEGER fields x, y, z, dx, dy, dz, r
   offsets(0) = 0
   oldtypes(0) = MPI_INTEGER
@@ -74,15 +83,10 @@ program minimilagro
        particletype, ierr)
   call MPI_TYPE_COMMIT(particletype, ierr)
 
-  !********************
-  !* allocate arrays
-  !********************
-  allocate(pcomplete(nmpi-1))
-  allocate(glbfinish(nmpi-1))
-  allocate(maxbfsize(nmpi-1))
-  allocate(req(nmpi-1))
-  allocate(counts(nmpi))
-  allocate(displs(nmpi))
+  !**************************
+  !* allocate working arrays
+  !**************************
+  call setArrays
 !
 !-- read and distribut input data
 !================================
@@ -91,22 +95,19 @@ program minimilagro
   if(lmpi0) then
      call initParticles(maxpars,pars)
      call domainDecompose(nmpi,dd,dsize,rsize)
-     !call getNeighbors(nmpi,nbrs)
      call scatterParticles(nmpi,maxpars,pars,dd,scattpars,&
           &counts,displs)
      !call printPars(impi0,scattpars)
-     !do i=1,nmpi
-     !   write(6,*) '>>',counts(i),displs(i)
-     !enddo
+     do i=1,nmpi
+        write(6,*) '0>>',counts(i),displs(i)
+     enddo
   endif
 
   call getNeighbors(nmpi,nbrs) ! everyone get its neighbor lists
 
   if(impi/=impi0) allocate(scattpars(maxpars))
-
   allocate(ps(maxpars))
   call initPs(ps)
-
   call mpi_scatterv(scattpars,counts,displs,particletype,&
        &        ps,maxpars,particletype,&
        &        impi0,MPI_COMM_WORLD,ierr)
@@ -114,7 +115,9 @@ program minimilagro
   !call printPars(impi,ps)
   do it=tsp_start,tsp_end
      write(6,*) '===> step ',it
-
+     subPars=getSubPars(ps)
+     subEnergy=getSubEnergy(ps)
+     !write(6,*) 'subPars=',impi,subPars
      call postRecvMaxParBuff(impi,nbrs)
 
      if(impi==impi0) then
@@ -122,18 +125,10 @@ program minimilagro
      else
         call postRecvFinish
      endif
-
-
-     if(impi==impi0)then
-        call scatterParticles(nmpi,maxpars,pars,dd,scattpars,&
-             &counts,displs)
+     call reduceTotalPars ! check total number of praticles on master
+     if (impi==impi0) then
+        write(6,*) 'after reduce>',ttlPars,ttlEnergy
      endif
-     call mpi_scatterv(scattpars,counts,displs,particletype,&
-       &        ps,maxpars,particletype,&
-       &        impi0,MPI_COMM_WORLD,ierr)
-     !call printPars(impi0,ps)
-
-
   enddo !tsp_it
 !
 !
@@ -150,15 +145,10 @@ program minimilagro
 
   call MPI_TYPE_FREE(particletype, ierr)
 
-  !********************
-  !* deallocate arrays
-  !********************
-  if(allocated(pcomplete)) deallocate(pcomplete)
-  if(allocated(glbfinish)) deallocate(glbfinish)
-  if(allocated(req)) deallocate(req)
-  if(allocated(maxbfsize)) deallocate(maxbfsize)
-  if(allocated(counts)) deallocate(counts)
-  if(allocated(displs)) deallocate(displs)
+  !****************************
+  !* deallocate working arrays
+  !****************************
+  call freeArrays
 
   call mpi_finalize(ierr) !MPI
 
@@ -317,8 +307,9 @@ contains
        if(source>-1)then
           call mpi_irecv(maxbfsize(i),1,MPI_INTEGER,source,rmpbtag,&
             & MPI_COMM_WORLD,req(i),ierr)
-          write(*,*) 'prmpb>>',myrank,source
+          !write(*,*) 'RecvMaxParBuff>>',myrank,source
        endif
+       !write(*,*) '              >>',myrank,i,maxbfsize(i)
     enddo
   end subroutine postRecvMaxParBuff
 
@@ -329,7 +320,7 @@ contains
        source=i
        call mpi_irecv(pcomplete(i),1,MPI_INTEGER,source,rpctag,&
             & MPI_COMM_WORLD,req(i),ierr)
-       write(6,*) 'par complete size>>',pcomplete(i)
+       !write(6,*) 'par complete size>>',pcomplete(i)
     enddo
   end subroutine postRecvParComplete
 
@@ -339,9 +330,46 @@ contains
     do i=1,nmpi-1
        call mpi_irecv(glbfinish(i),1,MPI_LOGICAL,0,rftag,&
             & MPI_COMM_WORLD,req(i),ierr)
-       write(6,*) 'global finish>>',glbfinish(i)
+       !write(6,*) 'global finish>>',glbfinish(i)
     enddo
   end subroutine postRecvFinish
+
+  subroutine reduceTotalPars()
+    implicit none
+    call mpi_reduce(subPars,ttlPars,1,MPI_INTEGER,MPI_SUM,0,MPI_COMM_WORLD,ierr)
+    call mpi_reduce(subEnergy,ttlEnergy,1,MPI_INTEGER,MPI_SUM,0,MPI_COMM_WORLD,ierr)
+  end subroutine reduceTotalPars
+
+  subroutine setArrays()
+    implicit none
+    integer::i
+    allocate(pcomplete(nmpi-1))
+    allocate(glbfinish(nmpi-1))
+    allocate(maxbfsize(nmpi-1))
+    allocate(req(nmpi-1))
+    do i=1,nmpi-1
+       pcomplete(i)=0
+       glbfinish=.false.
+       maxbfsize(i)=0
+    enddo
+    allocate(counts(nmpi))
+    allocate(displs(nmpi))
+    do i=1,nmpi
+       counts(i)=0
+       displs(i)=0
+    enddo
+  end subroutine setArrays
+
+  subroutine freeArrays()
+    implicit none
+    if(allocated(pcomplete)) deallocate(pcomplete)
+    if(allocated(glbfinish)) deallocate(glbfinish)
+    if(allocated(req)) deallocate(req)
+    if(allocated(maxbfsize)) deallocate(maxbfsize)
+    if(allocated(counts)) deallocate(counts)
+    if(allocated(displs)) deallocate(displs)
+    if(allocated(ps)) deallocate(ps)
+  end subroutine freeArrays
 
   integer function getCoor(dim)
     implicit none
@@ -361,6 +389,32 @@ contains
     e=INT((temp*2-1)*10)
     getEnergy=e
   end function getEnergy
+
+  integer function getSubPars(ps)
+    implicit none
+    type(par),dimension(:),intent(inout)::ps
+    integer::i,s
+    s=0
+    do i=1,maxpars
+       if(ps(i)%r/=-1) then
+          s=s+1
+       endif
+    enddo
+    getSubPars=s
+  end function getSubPars
+
+  integer function getSubEnergy(ps)
+    implicit none
+    type(par),dimension(:),intent(inout)::ps
+    integer::i,e
+    e=0
+    do i=1,maxpars
+       if(ps(i)%r/=-1) then
+          e=e+ps(i)%e
+       endif
+    enddo
+    getSubEnergy=e
+  end function getSubEnergy
 
 end program minimilagro
 ! vim: fdm=marker
