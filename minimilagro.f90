@@ -14,7 +14,7 @@ program minimilagro
   integer,dimension(:),allocatable :: maxbfsize  ! max particle buffer size on each ranks
   integer,dimension(:),allocatable :: pcomplete  ! array for number of particle complete on master
   logical :: globalFinish  ! global finish tag on slaves
-  integer :: pcmpl         ! number of particle complete on each slave
+  integer :: pcmplt        ! number of particle complete on each slave
 
   logical :: lmpi0 !true for the master rank
   integer :: impi !mpi rank
@@ -39,7 +39,7 @@ program minimilagro
   !***********
   type par
      integer :: x, y, z  ! coordinate
-     integer :: dx,dy,dz ! delta coordinate
+     !integer :: dx,dy,dz ! delta coordinate
      integer :: r        ! mpi rank
      integer  :: e        ! positive or negative energy
   end type par
@@ -61,6 +61,13 @@ program minimilagro
   integer particletype, oldtypes(0:1)   ! required variables
   integer blockcounts(0:1), offsets(0:1), extent
 
+  !************************
+  !* random generator
+  !************************
+  integer :: values(1:8), k
+  integer, dimension(:), allocatable :: seed
+  !real(8) :: r
+
   !********************
   !* mpi setups
   !********************
@@ -75,15 +82,15 @@ program minimilagro
   !**************************************
   !* mpi structure for passing particles
   !**************************************
-  ! setup description of the 7 MPI_INTEGER fields x, y, z, dx, dy, dz, r
+  ! setup description of the 7 MPI_INTEGER fields x, y, z, r
   offsets(0) = 0
   oldtypes(0) = MPI_INTEGER
-  blockcounts(0) = 7
+  blockcounts(0) = 4
 
   ! setup description of the  MPI_REAL fields n, type
   ! need to first figure offset by getting size of MPI_REAL
   call MPI_TYPE_EXTENT(MPI_INTEGER, extent, ierr)
-  offsets(1) = 7 * extent
+  offsets(1) = 4 * extent
   oldtypes(1) = MPI_INTEGER !MPI_REAL8
   blockcounts(1) = 1
 
@@ -110,12 +117,14 @@ program minimilagro
      do i=1,nmpi
         write(6,*) '0>>',counts(i),displs(i)
      enddo
+
   endif
 
   call getNeighbors(nmpi,nbrs) ! everyone get its neighbor lists
 
   if(impi/=impi0) allocate(scattpars(maxpars))
   allocate(ps(maxpars))
+  allocate(pbuff(maxpars))
   call initPs(ps)
   call mpi_scatterv(scattpars,counts,displs,particletype,&
        &        ps,maxpars,particletype,&
@@ -236,8 +245,9 @@ contains
        offset(i)=0
     enddo
     do i=1,psize
-       paridx=pars(i)%x+(pars(i)%y-1)*dimx
-       pars(i)%r=dd(paridx)%rid
+       !paridx=pars(i)%x+(pars(i)%y-1)*dimx
+       !pars(i)%r=dd(paridx)%rid
+       pars(i)%r=getRankId(pars(i)x,pars(i)%y,pars(i)%z)
        counts(dd(paridx)%rid+1)=counts(dd(paridx)%rid+1)+1
     enddo
     displs(1)=0
@@ -276,9 +286,6 @@ contains
        ps(i)%x=0
        ps(i)%y=0
        ps(i)%z=0
-       ps(i)%dx=0
-       ps(i)%dy=0
-       ps(i)%dz=0
        ps(i)%r=-1
        ps(i)%e=0
     enddo
@@ -379,19 +386,46 @@ contains
     if(allocated(counts)) deallocate(counts)
     if(allocated(displs)) deallocate(displs)
     if(allocated(ps)) deallocate(ps)
+    if(allocated(pbuff)) deallocate(pbuff)
   end subroutine freeArrays
 
   subroutine movePar(ps)
     implicit none
-    type(par),dimension(:),intent(in)::ps
+    type(par),dimension(:),intent(inout)::ps
     integer :: dir  ! x:0, y:1, z:2
     integer :: step ! -1, 0 , +1
-    do i=1,maxpars
-       if(ps(i)%r/=-1) then
-          dir=getDirection()
-          step=getStep()
-       endif
-    enddo
+    integer :: oldrank,newrank
+    !********************************
+    !* test random number generator
+    !********************************
+     call date_and_time(values=values)
+     call random_seed(size=k)
+     allocate(seed(1:k))
+     seed(:) = values(8)
+     call random_seed(put=seed)
+     do i=1,maxpars
+        if(ps(i)%r/=-1) then
+           dir=getDirection()
+           step=getStep()
+           oldrank=ps(i)%r
+           select case(dir)
+           case(0)
+              ps(i)%x=ps(i)%x+step
+           case(1)
+              ps(i)%y=ps(i)%y+step
+           case(2)
+              ps(i)%z=ps(i)%z+step
+           case default
+              stop 'invalid direction'
+           end select
+           newrank=getRankId(ps(i)%x,ps(i)%y,ps(i)%z)
+
+
+
+        pcmplt=pcmplt+1
+        endif
+     enddo
+
   end subroutine movePar
 
   integer function getCoor(dim)
@@ -412,6 +446,15 @@ contains
     e=INT((temp*2-1)*10)
     getEnergy=e
   end function getEnergy
+
+  integer function getRankId(x,y,z)
+    implicit none
+    integer,intent(in) ::x,y,z
+    integer::paridx,r
+    paridx=x+(y-1)*dimx+(z-1)*dimx*dimy
+    r=dd(paridx)%rid
+    getRankId=r
+  end function getRankId
 
   integer function getSubPars(ps)
     implicit none
@@ -462,9 +505,9 @@ contains
     real*8   :: temp
     integer  :: d
     call random_number(temp)
-    d=INT(temp*2)
+    d=FLOOR(temp*3)
     getDirection=d
-    write(6,*) 'dir>',d
+    !write(6,*) 'dir>',d
   end function getDirection
 
   integer function getStep()
@@ -472,9 +515,9 @@ contains
     real*8   :: temp
     integer  :: s
     call random_number(temp)
-    s=INT(temp*2-1)
+    s=FLOOR(temp*3)-1
     getStep=s
-    write(6,*) 'step>',s
+    !write(6,*) 'step>',s
   end function getStep
 
 end program minimilagro
