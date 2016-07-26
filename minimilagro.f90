@@ -49,10 +49,11 @@ program minimilagro
   !* particle
   !***********
   type par
-     integer :: x, y, z  ! coordinate
-     !integer :: dx,dy,dz ! delta coordinate
-     integer :: r        ! mpi rank
-     integer  :: e        ! positive or negative energy
+     integer :: x, y, z   ! coordinate
+     integer :: r         ! mpi rank
+     integer :: e         ! positive or negative energy
+     integer :: pid       ! particle id
+     logical :: lalive    ! alive
   end type par
   !***********************************************************************
   !*pars:       init total particles
@@ -95,19 +96,21 @@ program minimilagro
   lmpi0 = impi==impi0
   tsp_start = 1
   tsp_end   = 1
+  globalFinish=.false.
+  it=0
   !**************************************
   !* mpi structure for passing particles
   !**************************************
-  ! setup description of the 7 MPI_INTEGER fields x, y, z, r
+  ! setup description of the 7 MPI_INTEGER fields x, y, z, r, e, pid
   offsets(0) = 0
   oldtypes(0) = MPI_INTEGER
-  blockcounts(0) = 4
+  blockcounts(0) = 6
 
   ! setup description of the  MPI_REAL fields n, type
   ! need to first figure offset by getting size of MPI_REAL
   call MPI_TYPE_EXTENT(MPI_INTEGER, extent, ierr)
-  offsets(1) = 4 * extent
-  oldtypes(1) = MPI_INTEGER !MPI_REAL8
+  offsets(1) = 6 * extent
+  oldtypes(1) = MPI_LOGICAL !MPI_REAL8
   blockcounts(1) = 1
 
   ! define structured type and commit it
@@ -118,13 +121,12 @@ program minimilagro
   !**************************************************
   !* mpi structure for passing domain decompositions
   !**************************************************
-  ! setup description of the 7 MPI_INTEGER fields x, y, z, r
+  ! setup description of the 1 MPI_INTEGER fields gid:globalid
   offsets(0) = 0
   oldtypes(0) = MPI_INTEGER
   blockcounts(0) = 1
 
-  ! setup description of the  MPI_REAL fields n, type
-  ! need to first figure offset by getting size of MPI_REAL
+  ! setup description of the  MPI_INTEGER fields rid:rankid
   call MPI_TYPE_EXTENT(MPI_INTEGER, extent, ierr)
   offsets(1) = 1 * extent
   oldtypes(1) = MPI_INTEGER
@@ -168,19 +170,21 @@ program minimilagro
        &        ps,maxpars,particletype,&
        &        impi0,MPI_COMM_WORLD,ierr)
 
-  do it=tsp_start,tsp_end
+  !do it=tsp_start,tsp_end
+  do while(.not. globalFinish)
      !if(impi==dmpi) then
      !   call printPars(impi,ps)
      !endif
      subPars=getSubPars(ps)
      subEnergy=getSubEnergy(ps)
      !write(6,*) 'subPars=',impi,subPars
-     call postRecvMaxParBuff(impi,nbrs)
+     call recvMaxParBuff(impi,nbrs)
 
      if(impi==impi0) then
-        call postRecvParComplete
+        it=it+1
+        call recvParComplete
      else
-        call postRecvFinish
+        call recvFinish
      endif
      call reduceTotalPars ! check total number of praticles on master
      if (impi==impi0) then
@@ -193,10 +197,10 @@ program minimilagro
      if (existLocalPar.eqv..TRUE.) then
         call movePar(ps)
      endif
-     call mpi_waitall(nmpi,reqrb,istat,ierr)
+     !call mpi_waitall(nmpi,reqrb,istat,ierr)
      call recvBuffer(impi,ps,nbrs)
      if(impi==dmpi) then
-        call printPars(impi,ps)
+        !call printPars(impi,ps)
      endif
   enddo !tsp_it
 !
@@ -234,25 +238,26 @@ contains
     call random_seed()
     write(6,*) 'init pars:   x           y           z        energy'
     do i=1,size
-      pars(i)%x=getCoor(dimx)
-      pars(i)%y=getCoor(dimy)
-      pars(i)%z=getCoor(dimz)
-      if(i<=size/2) then
-         temp=getEnergy()
-         pars(i)%e=temp
-         pars(size-i+1)%e=-1*temp
-      endif
-      if (mod(size,2)==0) then
-      else
-         if(i==size/2+1) then
-            pars(i)%e=0
-         endif
-      endif
-      pars(i)%e=i ! test energy as label
-      tot=tot+pars(i)%e
-      write(6,*) '->',pars(i)%x,pars(i)%y,pars(i)%z,pars(i)%e
+       pars(i)%lalive=.true.
+       pars(i)%x=getCoor(dimx)
+       pars(i)%y=getCoor(dimy)
+       pars(i)%z=getCoor(dimz)
+       if(i<=size/2) then
+          temp=getEnergy()
+          pars(i)%e=temp
+          pars(size-i+1)%e=-1*temp
+       endif
+       if (mod(size,2)==0) then
+       else
+          if(i==size/2+1) then
+             pars(i)%e=0
+          endif
+       endif
+       pars(i)%pid=i ! test energy as label
+       tot=tot+pars(i)%e
+       write(6,*) '->',pars(i)%x,pars(i)%y,pars(i)%z,pars(i)%e,pars(i)%pid
     enddo
-    write(6,'(A50,I1)') ' ================================ total energy: ',tot
+    write(6,'(A50,I10)') ' ================================ total energy: ',tot
   end subroutine initParticles
 
   subroutine domainDecompose(mpi_size,dd,v,c)
@@ -283,16 +288,17 @@ contains
     integer,dimension(:),allocatable,intent(out) :: counts,displs
     integer,dimension(:),allocatable :: offset
     type(par),dimension(:),allocatable,intent(out)::scattpars
-    integer :: i,rankid,pointer
+    integer :: i,rankid,pointer,stage
     allocate(counts(mpi_size),displs(mpi_size),offset(mpi_size))
     allocate(scattpars(psize))
+    stage=0
     do i=1,mpi_size
        counts(i)=0
        displs(i)=0
        offset(i)=0
     enddo
     do i=1,psize
-       rankid=getRankId(pars(i)%x,pars(i)%y,pars(i)%z)
+       rankid=getRankId(pars(i)%x,pars(i)%y,pars(i)%z,pars(i)%pid)
        pars(i)%r=rankid
        counts(rankid+1)=counts(rankid+1)+1
     enddo
@@ -319,9 +325,9 @@ contains
     if(impi==myrank)then
        write(6,*) '>print pars'
        do i=1,maxpars
-          write(6,'(1X,A4,I2,A3,I2,A1,I2,A1,I2,A6,I2,A8,I2)') &
+          write(6,'(1X,A4,I2,A3,I2,A1,I2,A1,I2,A6,I2,A8,I2,A5,I10)') &
                &'rnk(',impi,') (',ps(i)%x,',',ps(i)%y,',',ps(i)%z,&
-               &') rnk=',ps(i)%r,' energy=',ps(i)%e
+               &') rnk=',ps(i)%r,' energy=',ps(i)%e,' pid=',ps(i)%pid
        enddo
        write(6,*)
     endif
@@ -363,6 +369,8 @@ contains
        ps(i)%z=0
        ps(i)%r=-1
        ps(i)%e=0
+       ps(i)%pid=0
+       ps(i)%lalive=.false.
     enddo
     do i=1,nmpi
        do j=1,bfsize
@@ -371,6 +379,8 @@ contains
           sndbuff(i,j)%z=0
           sndbuff(i,j)%r=-1
           sndbuff(i,j)%e=0
+          sndbuff(i,j)%pid=0
+          sndbuff(i,j)%lalive=.false.
        enddo !j
        sndidx(i)=0
     enddo !i
@@ -401,7 +411,7 @@ contains
     nbrs(4,3)=1
   end subroutine getNeighbors
 
-  subroutine postRecvMaxParBuff(myrank,nbrs)
+  subroutine recvMaxParBuff(myrank,nbrs)
     implicit none
     integer,intent(in)::myrank
     integer,dimension(:,:),intent(in)::nbrs
@@ -410,17 +420,17 @@ contains
        source=i-1
        flag=nbrs(myrank+1,i)
        if(flag==1)then
-          call mpi_irecv(maxbfsize(i),1,MPI_INTEGER,source,rmpbtag,&
-            & MPI_COMM_WORLD,reqmbs(i),ierr)
+          !call mpi_irecv(maxbfsize(i),1,MPI_INTEGER,source,rmpbtag,&
+          !  & MPI_COMM_WORLD,reqmbs(i),ierr)
           !write(6,'(A17,I2,A9,I2,A2,I1,A7,I5,A1)') ' recvMaxParBuff@(',&
           !     &myrank,')<-nbrnk(',source,'):',flag,' maxbf(',maxbfsize(i),')'
           call mpi_irecv(rcvbuff(i,1),maxbfsize(i),particletype,source,rbftag,&
             & MPI_COMM_WORLD,reqrb(i),ierr)
        endif
     enddo
-  end subroutine postRecvMaxParBuff
+  end subroutine recvMaxParBuff
 
-  subroutine postRecvParComplete()
+  subroutine recvParComplete()
     implicit none
     integer::i,source
     do i=1,nmpi-1
@@ -429,9 +439,9 @@ contains
             & MPI_COMM_WORLD,reqpc(i),ierr)
        !write(6,*) 'par complete size>>',pcomplete(i)
     enddo
-  end subroutine postRecvParComplete
+  end subroutine recvParComplete
 
-  subroutine postRecvFinish()
+  subroutine recvFinish()
     implicit none
     !use the last req to receive global finish flag
     !do i=1,nmpi-1
@@ -440,7 +450,7 @@ contains
          & MPI_COMM_WORLD,reqgf,ierr)
     !write(6,*) 'global finish>>',globalFinish
     !enddo
-  end subroutine postRecvFinish
+  end subroutine recvFinish
 
   subroutine reduceTotalPars()
     implicit none
@@ -490,7 +500,7 @@ contains
     !type(cell),dimension(:),intent(in)   ::dd
     integer :: dir  ! x:0, y:1, z:2
     integer :: step ! -1, 0 , +1
-    integer :: oldrank,newrank
+    integer :: oldrank,newrank,stage
     !********************************
     !* test random number generator
     !********************************
@@ -500,7 +510,8 @@ contains
      seed(:) = values(8)
      call random_seed(put=seed)
      do i=1,maxpars
-        if(ps(i)%r/=-1) then
+        !if(ps(i)%r/=-1) then
+        if(ps(i)%lalive.eqv..true.) then
            dir=getDirection()
            step=getStep()
            oldrank=ps(i)%r
@@ -515,9 +526,14 @@ contains
            case default
               stop 'invalid direction'
            end select
-           newrank=getRankId(ps(i)%x,ps(i)%y,ps(i)%z)
+           stage=1
+           newrank=getRankId(ps(i)%x,ps(i)%y,ps(i)%z,ps(i)%pid)
            ps(i)%r=newrank
-           !write(6,'(5X,A6,I2,A6,I2,A1)') 'move>(',oldrank,') to (',newrank,')'
+           if(impi==0) then
+              write(6,'(5X,A6,I2,A6,I2,A1,I2,I2,I2,I10)') &
+                   &'move>(',oldrank,') to (',newrank,')',&
+                   &ps(i)%x,ps(i)%y,ps(i)%z,ps(i)%pid
+           endif
            if(newrank/=oldrank) then
               !write(6,'(1X,A6,I2,A6,I2,A6,I5,A5,I5,A1)') 'from (',oldrank,&
               !     &') to (',newrank,') top(',sndidx(newrank+1),') mx(',&
@@ -529,7 +545,7 @@ contains
                  call cleanBuffer(sndbuff,sndidx,newrank)
                  call writeBuffer(sndbuff,sndidx,newrank,ps(i))
               endif
-              call removeParticle(i,ps) ! remove it from local ps
+              call delParticle(i,ps) ! remove it from local ps
            endif
            pcmplt=pcmplt+1
         endif
@@ -538,7 +554,7 @@ contains
      !* print leftover snd buffer
      !****************************
      if (impi==dmpi-1) then
-        call printBuffer(impi,sndbuff,sndidx)
+        !call printBuffer(impi,sndbuff,sndidx)
      endif
   end subroutine movePar
 
@@ -565,11 +581,11 @@ contains
        top=sndidx(i)
        do j=1,top
           if(sndbuff(i,j)%r/=-1) then
-             write(6,'(A9,I2,A5,I2,A3,I2,A1,I2,A1,I2,A6,I2,A8,I2)') &
+             write(6,'(A9,I2,A5,I2,A3,I2,A1,I2,A1,I2,A6,I2,A8,I2,A5,I10)') &
                   &' nbr rank(',i-1,')par(',j,&
                   &')=(',sndbuff(i,j)%x,',',sndbuff(i,j)%y,',',&
                   &sndbuff(i,j)%z,') rnk=',sndbuff(i,j)%r,&
-                  &' energy=',sndbuff(i,j)%e
+                  &' energy=',sndbuff(i,j)%e,' pid=',sndbuff(i,j)%pid
           endif
        enddo
     enddo
@@ -583,8 +599,8 @@ contains
     integer,intent(in)::newrank
     integer::count
     count=sndidx(newrank+1) ! increment number of buffered par
-    write(6,'(A12,I2,A2,I5,A5,I2,A2)') 'send@rank(',myrank,') ',&
-         &count,' to (',newrank,')'
+    !write(6,'(A12,I2,A2,I5,A5,I2,A2)') 'send@rank(',myrank,') ',&
+    !     &count,' to (',newrank,')'
     call mpi_send(sndbuff(newrank+1,1),count,particletype,newrank,&
          &sndtag,MPI_COMM_WORLD,ierr)
   end subroutine sendBuffer
@@ -603,20 +619,19 @@ contains
        sndbuff(newrank+1,i)%z=0
        sndbuff(newrank+1,i)%r=-1
        sndbuff(newrank+1,i)%e=0
+       sndbuff(newrank+1,i)%pid=0
+       sndbuff(newrank+1,i)%lalive=.false.
     enddo
     sndidx(newrank+1)=0 ! clean buffer top
   end subroutine cleanBuffer
 
-  subroutine removeParticle(idx,ps)
+  subroutine delParticle(idx,ps)
     implicit none
     integer,intent(in)::idx
     type(par),dimension(:),intent(inout)::ps
-    ps(idx)%x=0
-    ps(idx)%y=0
-    ps(idx)%z=0
     ps(idx)%r=-1
-    ps(idx)%e=0
-  end subroutine removeParticle
+    ps(idx)%lalive=.false.
+  end subroutine delParticle
 
   subroutine recvBuffer(myrank,ps,nbrs)
     implicit none
@@ -633,7 +648,7 @@ contains
 !-- add incoming particles to main particle array on this rank
              pstop=getSubPars(ps)
              do rcvidx = 1, maxbfsize(i)
-                if(rcvbuff(i,rcvidx)%r/=-1) then
+                if(rcvbuff(i,rcvidx)%x/=0) then
                    ps(pstop+rcvidx)=rcvbuff(i,rcvidx)
                 end if
              enddo
@@ -664,12 +679,17 @@ contains
     getEnergy=e
   end function getEnergy
 
-  integer function getRankId(x,y,z)
+  integer function getRankId(x,y,z,pid)
     implicit none
-    integer,intent(in) ::x,y,z
-    integer::paridx,r
-    paridx=x+(y-1)*dimx+(z-1)*dimx*dimy
-    r=dd(paridx)%rid
+    integer,intent(in) ::x,y,z,pid
+    integer::grdidx,r
+    grdidx=x+(y-1)*dimx+(z-1)*dimx*dimy
+    if(grdidx>32) then
+       write(6,'(A9,I2,A1,I2,A1,I2,A7,I3,A4,I10)') &
+            &'@getrid>(',x,',',y,',',z,' grdid=',grdidx,&
+            &'pid=',pid
+    endif
+    r=dd(grdidx)%rid
     getRankId=r
   end function getRankId
 
@@ -707,7 +727,7 @@ contains
     s=0
     l=.FALSE.
     do i=1,maxpars
-       if(ps(i)%r/=-1) then
+       if(ps(i)%lalive) then
           s=s+1
        endif
     enddo
