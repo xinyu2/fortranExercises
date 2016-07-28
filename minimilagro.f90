@@ -7,10 +7,11 @@ program minimilagro
 ! TODO and wishlist:
 !***********************************************************************
   integer,parameter :: impi0=0 !the master rank
-  integer,parameter :: maxpars=1
-  integer,parameter :: dimx=4,dimy=8,dimz=1
+  integer,parameter :: BUFFSIZE=6
+  integer,parameter :: maxpars=5
+  integer,parameter :: dimx=8,dimy=8,dimz=1
   integer,parameter :: rmpbtag=5,rpctag=10,rftag=15,sndtag=20,rbftag=20
-  integer,parameter :: dmpi=1 !debug this mpi rank
+  integer,parameter :: dmpi=3 !debug this mpi rank
 
   integer,dimension(:),allocatable :: maxbfsize  ! max particle buffer size on each ranks
   integer,dimension(:),allocatable :: pcomplete  ! array for number of particle complete on master
@@ -20,7 +21,7 @@ program minimilagro
   logical :: lmpi0 !true for the master rank
   integer :: impi !mpi rank
   integer :: nmpi !number of mpi tasks
-  integer :: ierr,it,istat(MPI_STATUS_SIZE,2),i
+  integer :: ierr,it,istat(MPI_STATUS_SIZE),i
   integer :: tsp_start,tsp_end !time step
   !********************************
   !* reqs:
@@ -30,7 +31,7 @@ program minimilagro
   !* reqgf:  global finish
   !* rbflag: receive buffer flag
   !********************************
-  integer,dimension(:),allocatable :: req,reqmbs,reqrb,reqpc
+  integer,dimension(:),allocatable :: reqrb,reqpc
   integer :: reqgf
   logical,dimension(:),allocatable :: rbflag,rpcflag
   logical :: rgfflag
@@ -69,7 +70,6 @@ program minimilagro
   type(par),allocatable,target :: pars(:),scattpars(:),ps(:),&
        &sndbuff(:,:),rcvbuff(:,:)
   integer,allocatable,target :: sndidx(:)
-  integer,parameter :: BUFFSIZE=1
 
   integer,dimension(:),allocatable :: counts,displs
   integer ::ttlPars   ! number of total particles, reduced to master
@@ -154,50 +154,37 @@ program minimilagro
      call domainDecompose(nmpi,dd,dsize,rsize)
      call scatterParticles(nmpi,maxpars,pars,scattpars,&
           &counts,displs)
-     do i=1,nmpi
-        write(6,*) '0>>',counts(i),displs(i)
-     enddo
+     !do i=1,nmpi
+     !   write(6,*) '0>>',counts(i),displs(i)
+     !enddo
   endif
 
   call bcastDD
-  !call printDD(1,dd)
   call getNeighbors(nmpi,nbrs) ! everyone get its neighbor lists
 
   if(impi/=impi0) then
      allocate(scattpars(maxpars))
   endif
   allocate(ps(maxpars))
-  allocate(sndbuff(nmpi,int(BUFFSIZE)))
-  allocate(rcvbuff(nmpi,int(BUFFSIZE)))
+  allocate(sndbuff(nmpi,BUFFSIZE))
+  allocate(rcvbuff(nmpi,BUFFSIZE))
   allocate(sndidx(nmpi))
   call initRank(impi,ps,sndbuff,sndidx,rcvbuff)
   !call mpi_scatterv(scattpars,counts,displs,particletype,&
   !     &        ps,maxpars,particletype,&
   !     &        impi0,MPI_COMM_WORLD,ierr)
-  do while(.not.globalFinish)
-  !do while(it<20)
-     it=it+1
-     if (impi==impi0) then
-        write(6,*) '===> step ',it,globalFinish
-     endif
-     if(it<5) then
-        call printPars(0,ps)
-     else
-        call printPars(1,ps)
-     endif
-     subPars=getSubPars(ps)
-     subEnergy=getSubEnergy(ps)
-     !write(6,*) 'subPars=',impi,subPars
-     call recvMaxParBuff(impi,nbrs)
+  !do while(.not.globalFinish)
+  call recvMaxParBuff(impi,nbrs)
+  if(impi==impi0) then
+     call recvParComplete
+  else
+     call recvFinish
+  endif
 
-     if(impi==impi0) then
-        call recvParComplete
-     else
-        call recvFinish
-     endif
-     !call reduceTotalPars ! check total number of praticles on master
+  do while(.not.globalFinish)
+     it=it+1
      !if (impi==impi0) then
-     !   write(6,*) 'after reduce>',ttlPars,ttlEnergy
+     !   write(6,*) '===> step ',it,globalFinish
      !endif
      existLocalPar=getExistLocalPar(ps)
      if (existLocalPar) then
@@ -215,10 +202,8 @@ program minimilagro
         if(impi==0) then
            do i=1,nmpi-1
               call mpi_test(reqpc(i),rpcflag(i),istat,ierr)
-              write(6,*) '@testpc',rpcflag
               if(rpcflag(i)) then
                  pcmplt=pcmplt+pcomplete(i)
-                 write(6,'(A9,I5)') 'complete:',pcmplt
                  call mpi_irecv(pcomplete(i),1,MPI_INTEGER,i,rpctag,&
                       & MPI_COMM_WORLD,reqpc(i),ierr)
               endif
@@ -231,15 +216,12 @@ program minimilagro
               enddo
            endif
         else  ! end master
-           write(6,*) '@sndpcmplt',pcmplt
            call mpi_send(pcmplt,1,MPI_integer,0,&
                 &rpctag,MPI_COMM_WORLD,ierr)
            pcmplt=0
            call mpi_test(reqgf,rgfflag,istat,ierr)
            !write(6,*) '@testgf',rgfflag
-           globalFinish=.true.
            if(rgfflag) then
-              globalFinish=globalFinish
               write(6,'(A5,I2,A20)') 'rank(',impi,') recv global finish'
            endif
         endif ! end slaves
@@ -256,11 +238,21 @@ program minimilagro
            do i = 1,nmpi-1
               call mpi_cancel(reqpc(i),ierr)
            enddo
-        else
-           call mpi_cancel(reqgf,ierr)
         endif
      endif
   enddo !tsp_it
+
+  subPars=getSubPars(ps)
+  subEnergy=getSubEnergy(ps)
+  !write(6,'(A5,I2,A9,I5,A11,I2)') '@rank',impi,' subPars=',subPars,' subEnergy=',subEnergy
+
+  call reduceTotalPars ! check total number of praticles on master
+  if (impi==impi0) then
+     write(6,*) 'after reduce>',ttlPars,ttlEnergy
+  endif
+  if(impi==nmpi-1) then
+     call printPars(impi,ps)
+  endif
 !
 !
 !--
@@ -268,7 +260,7 @@ program minimilagro
 !=============
 ! call mpi_barrier(MPI_COMM_WORLD,ierr) !MPI
 !-- Print timing output
-  call mpi_barrier(MPI_COMM_WORLD,ierr)
+  !call mpi_barrier(MPI_COMM_WORLD,ierr)
   if(lmpi0) then
      write(6,*)
      write(6,*) 'milagro finished'
@@ -298,7 +290,7 @@ contains
     do i=1,size
        pars(i)%lalive=.true.
        pars(i)%x=getCoor(dimx)
-       pars(i)%x=1 ! test
+       !pars(i)%x=1 ! test
        pars(i)%y=getCoor(dimy)
        pars(i)%y=1 ! test
        pars(i)%z=getCoor(dimz)
@@ -385,7 +377,7 @@ contains
     if(impi==myrank)then
        write(6,*) '>print pars'
        do i=1,maxpars
-          write(6,'(1X,A4,I2,A3,I2,A1,I2,A1,I2,A6,I2,A8,I2,A5,I10)') &
+          write(6,'(1X,A4,I3,A3,I3,A1,I3,A1,I2,A6,I2,A8,I2,A5,I10)') &
                &'rnk(',impi,') (',ps(i)%x,',',ps(i)%y,',',ps(i)%z,&
                &') rnk=',ps(i)%r,' energy=',ps(i)%e,' pid=',ps(i)%pid
        enddo
@@ -422,8 +414,7 @@ contains
     type(par),dimension(:),  intent(inout)::ps
     type(par),dimension(:,:),intent(inout)::sndbuff,rcvbuff
     integer,  dimension(:),intent(inout)::sndidx
-    integer::i,j,bfsize
-    bfsize=BUFFSIZE
+    integer::i,j
     do i=1,maxpars
        ps(i)%x=0
        ps(i)%y=0
@@ -434,10 +425,10 @@ contains
        ps(i)%lalive=.false.
     enddo
     if(myrank==0) then
-       ps(1)=pars(1)
+       ps=pars
     endif
     do i=1,nmpi
-       do j=1,bfsize
+       do j=1,BUFFSIZE
           sndbuff(i,j)%x=0
           sndbuff(i,j)%y=0
           sndbuff(i,j)%z=0
@@ -489,10 +480,8 @@ contains
        source=i-1
        flag=nbrs(myrank+1,i)
        if(flag==1)then
-          !call mpi_irecv(rcvbuff(i,1),maxbfsize(i),particletype,source,rbftag,&
-          !     & MPI_COMM_WORLD,reqrb(i),ierr)
-          call mpi_recv(rcvbuff(i,1),maxbfsize(i),particletype,source,rbftag,&
-            & MPI_COMM_WORLD,istat,ierr)
+          call mpi_irecv(rcvbuff(i,1),BUFFSIZE,particletype,source,rbftag,&
+               & MPI_COMM_WORLD,reqrb(i),ierr)
        endif
     enddo
   end subroutine recvMaxParBuff
@@ -523,12 +512,16 @@ contains
     implicit none
     integer::i
     allocate(pcomplete(nmpi),maxbfsize(nmpi))
-    allocate(req(nmpi),reqmbs(nmpi),reqrb(nmpi),reqpc(nmpi),&
+    allocate(reqrb(nmpi),reqpc(nmpi-1),&
          &rbflag(nmpi),rpcflag(nmpi-1))
-    do i=1,nmpi
-       pcomplete(i)=0
-       maxbfsize(i)=BUFFSIZE ! test should init to 0 and eval to maxpar/nmpi
-    enddo
+    !do i=1,nmpi
+    pcomplete=0
+    maxbfsize=BUFFSIZE ! test should init to 0 and eval to maxpar/nmpi
+    reqrb=0
+    reqpc=0
+    rbflag=.false.
+    rpcflag=.false.
+    !enddo
     allocate(counts(nmpi))
     allocate(displs(nmpi))
     do i=1,nmpi
@@ -540,8 +533,6 @@ contains
   subroutine freeArrays()
     implicit none
     if(allocated(pcomplete)) deallocate(pcomplete)
-    if(allocated(req)) deallocate(req)
-    if(allocated(reqmbs)) deallocate(reqmbs)
     if(allocated(reqrb)) deallocate(reqrb)
     if(allocated(reqpc)) deallocate(reqpc)
     if(allocated(rbflag)) deallocate(rbflag)
@@ -573,7 +564,7 @@ contains
     seed(:) = values(8)
     call random_seed(put=seed)
     do i=1,maxpars
-       if(ps(i)%lalive.eqv..true.) then
+       if(ps(i)%lalive) then
           dir=getDirection()
           step=getStep()
           oldrank=ps(i)%r
@@ -591,16 +582,17 @@ contains
           stage=1
           newrank=getRankId(ps(i)%x,ps(i)%y,ps(i)%z,ps(i)%pid)
           ps(i)%r=newrank
-          if(impi==0) then
-             write(6,'(5X,A6,I2,A6,I2,A1,I2,I2,I2,I10)') &
-                  &'move>(',oldrank,') to (',newrank,')',&
-                  &ps(i)%x,ps(i)%y,ps(i)%z,ps(i)%pid
-          endif
+          !if(impi==0) then
+          !   write(6,'(5X,A6,I2,A6,I2,A1,I2,I2,I2,I10)') &
+          !        &'move>(',oldrank,') to (',newrank,')',&
+          !        &ps(i)%x,ps(i)%y,ps(i)%z,ps(i)%pid
+          !endif
           if(newrank/=oldrank) then
              !write(6,'(1X,A6,I2,A6,I2,A6,I5,A5,I5,A1)') 'from (',oldrank,&
              !     &') to (',newrank,') top(',sndidx(newrank+1),') mx(',&
              !     &maxbfsize(newrank+1),')'
-             if(sndidx(newrank+1)<maxbfsize(newrank+1)) then
+             !if(sndidx(newrank+1)<maxbfsize(newrank+1)) then
+             if(sndidx(newrank+1)<BUFFSIZE) then
                 call writeBuffer(sndbuff,sndidx,newrank,ps(i))
              else
                 !call printBuffer(impi,sndbuff,sndidx)
@@ -612,16 +604,16 @@ contains
           if(ps(i)%y==dimy) then
              pcmplt=pcmplt+1
              ps(i)%lalive=.false.
-             write(6,*) 'hit!',impi,i,pcmplt
+             !write(6,'(A6,I2,A5,I5,A9)') '@rank(',impi,') pr.',i,' finished'
           endif
        endif
     enddo
     !****************************
     !* print leftover snd buffer
     !****************************
-    !if (impi==dmpi-1) then
-    !   call printBuffer(impi,sndbuff,sndidx)
-    !endif
+    if (impi==dmpi) then
+       call printBuffer(impi,sndbuff,sndidx)
+    endif
   end subroutine movePar
 
   subroutine writeBuffer(sndbuff,sndidx,newrank,p)
@@ -632,6 +624,7 @@ contains
     type(par),intent(in)::p
     integer::i
     sndidx(newrank+1)=sndidx(newrank+1)+1 ! increment number of buffered par
+    !write(6,'(A15,I5)') '@writebuff,idx=',sndidx(newrank+1)
     i=sndidx(newrank+1)
     sndbuff(newrank+1,i)=p
   end subroutine writeBuffer
@@ -665,10 +658,12 @@ contains
     integer,intent(in)::newrank
     integer::count
     count=sndidx(newrank+1) ! increment number of buffered par
-    write(6,'(A12,I2,A2,I5,A8,I2,A2)') 'send@rank(',myrank,') ',&
-         &count,'prs to (',newrank,')'
-    call printBuffer(myrank,sndbuff,sndidx)
-    call mpi_send(sndbuff(newrank+1,1),count,particletype,newrank,&
+    if(myrank<0) then ! don't print
+       write(6,'(A12,I2,A2,I5,A8,I2,A2)') 'send@rank(',myrank,') ',&
+            &count,'prs to (',newrank,')'
+    endif
+    !call mpi_send(sndbuff(newrank+1,1),count,particletype,newrank,&
+    call mpi_send(sndbuff(newrank+1,1),BUFFSIZE,particletype,newrank,&
          &sndtag,MPI_COMM_WORLD,ierr)
     call cleanBuffer(sndbuff,sndidx,newrank)
   end subroutine sendBuffer
@@ -712,19 +707,15 @@ contains
        flag=nbrs(myrank+1,i)
        if(flag==1)then
           call mpi_test(reqrb(i),rbflag(i),istat,ierr)
-          write(6,*) '@recvbuff',myrank,i,rbflag(i)
           if(rbflag(i)) then
 !-- add incoming particles to main particle array on this rank
-             do rcvidx = 1, maxbfsize(i)
-                !if(impi==1) then
+             do rcvidx = 1, BUFFSIZE ! maxbfsize(i)
                 write(6,'(I2,I2,I2,I2,I3,I10)') impi,rcvbuff(i,rcvidx)%x,rcvbuff(i,rcvidx)%y,&
-                     &rcvbuff(i,rcvidx)%z,rcvbuff(i,rcvidx)%e,&
-                     &rcvbuff(i,rcvidx)%pid
-                !endif
+                     &rcvbuff(i,rcvidx)%z,rcvbuff(i,rcvidx)%e,rcvbuff(i,rcvidx)%pid
                 if(rcvbuff(i,rcvidx)%x/=0) then
                    psid=rcvbuff(i,rcvidx)%pid
                    ps(psid)=rcvbuff(i,rcvidx)
-                end if
+                endif
                 rcvbuff(i,rcvidx)%x=0
                 rcvbuff(i,rcvidx)%y=0
                 rcvbuff(i,rcvidx)%z=0
@@ -734,12 +725,11 @@ contains
                 rcvbuff(i,rcvidx)%lalive=.false.
              enddo
 !-- repost the nonblocking receive
-             call mpi_irecv(rcvbuff(i,1),maxbfsize(i),particletype, &
+             call mpi_irecv(rcvbuff(i,1),BUFFSIZE,particletype, &
                   source,rbftag,MPI_COMM_WORLD,reqrb(i),ierr)
           endif
        endif
     enddo
-    !call printPars(myrank,ps)
   end subroutine recvBuffer
 
   integer function getCoor(dim)
@@ -766,11 +756,6 @@ contains
     integer,intent(in) ::x,y,z,pid
     integer::grdidx,r
     grdidx=x+(y-1)*dimx+(z-1)*dimx*dimy
-    if(grdidx>dimx*dimy*dimz) then
-       write(6,'(A9,I2,A1,I2,A1,I2,A7,I3,A4,I10)') &
-            &'@getrid>(',x,',',y,',',z,' grdid=',grdidx,&
-            &'pid=',pid
-    endif
     r=dd(grdidx)%rid
     if(r>nmpi-1) then
        write(6,'(A9,I2,A1,I2,A1,I2,A7,I3,A4,I10)') &
