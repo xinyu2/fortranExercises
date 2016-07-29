@@ -7,9 +7,9 @@ program milagroloop
 ! TODO and wishlist:
 !***********************************************************************
   integer,parameter :: impi0=0 !the master rank
-  integer,parameter :: maxpars=1000000
-  integer,parameter :: BUFFSIZE=1000,MAXSTEP=1000
-  integer,parameter :: dimx=1000,dimy=1000,dimz=1
+  integer,parameter :: maxpars=1024*1024
+  integer,parameter :: BUFFSIZE=1024,MAXSTEP=1024
+  integer,parameter :: dimx=1024,dimy=1024,dimz=1
   integer,parameter :: rmpbtag=5,rpctag=10,rftag=15,sndtag=20,rbftag=20
   integer,parameter :: dmpi=1 !debug this mpi rank
 
@@ -321,7 +321,8 @@ contains
        pars(i)%pid=i ! test energy as label
        tot=tot+pars(i)%e
        if(i==size) then
-          write(6,*) '->',pars(i)%x,pars(i)%y,pars(i)%z,pars(i)%e,pars(i)%pid
+          write(6,'(A2,I4,I4,I4,I3,I10)') '->',&
+               &pars(i)%x,pars(i)%y,pars(i)%z,pars(i)%e,pars(i)%pid
        endif
     enddo
     write(6,'(A50,I10)') ' ================================ total energy: ',tot
@@ -336,7 +337,7 @@ contains
     allocate(pars(size))
     tot=0
     call random_seed()
-    write(6,*) 'init pars:   x           y           z        energy'
+    write(6,*) '  init pars:   x           y           z        energy'
     do i=1,dimy
        do j=1,dimx
           l=(i-1)*dimx+j
@@ -359,7 +360,8 @@ contains
           pars(l)%pid=l ! test energy as label
           tot=tot+pars(l)%e
           if(l==size) then
-          write(6,*) '->',pars(l)%x,pars(l)%y,pars(l)%z,pars(l)%e,&
+          write(6,'(A2,12X,I5,7X,I5,5X,I5,10X,I3,7X,I5,I10)') '->',&
+               &pars(l)%x,pars(l)%y,pars(l)%z,pars(l)%e,&
                &pars(l)%step,pars(l)%pid
           endif
        enddo
@@ -848,7 +850,7 @@ contains
     integer::i,s
     s=0
     do i=1,maxpars
-       if(ps(i)%lalive) then
+       if(ps(i)%x>0) then
           s=s+1
        endif
     enddo
