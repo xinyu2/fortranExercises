@@ -261,7 +261,6 @@ program milagroimpr
         endif ! end slaves
      endif
      if(globalFinish) then
-        write(6,*) '@globalfinish',impi,globalFinish
         do i=1,nmpi
            flag=nbrs(impi+1,i)
            if(flag==1)then
@@ -621,7 +620,7 @@ contains
   subroutine setArrays()
     implicit none
     integer::i
-    allocate(pcomplete(nmpi),maxbfsize(nmpi))
+    allocate(pcomplete(2),maxbfsize(nmpi))
     allocate(reqrb(nmpi),reqpc(2),cmpind(2),&
          &rbflag(nmpi),rpcflag(nmpi-1))
     !do i=1,nmpi
@@ -662,7 +661,7 @@ contains
   subroutine movePar(ps,pcmplt)
     implicit none
     type(par), dimension(:),intent(inout)::ps
-    integer,intent(out)::pcmplt
+    integer,intent(inout)::pcmplt
     !type(cell),dimension(:),intent(in)   ::dd
     integer :: dir  ! x:0, y:1, z:2
     integer :: step ! -1, 0 , +1
@@ -859,20 +858,23 @@ contains
     type(trnode),intent(in)::tn
     integer,intent(inout)::ncmplt
     integer::i,idx,chd
-    call mpi_testsome(2,reqpc,outreq,cmpind,istat,ierr)
-    if(outreq>0) then
-       do i=1,outreq
-          idx=cmpind(i)
-          ncmplt=ncmplt+pcomplete(i)
-          if (idx==1) then
-             chd=tn%lchild
-          else
-             chd=tn%rchild
-          endif
-          call mpi_irecv(pcomplete(idx),1,MPI_INTEGER,chd,rpctag,&
-               & MPI_COMM_WORLD,reqpc(idx),ierr)
-          !write(6,*) '@tally',myrank,ncmplt
-       enddo
+    if(tn%lchild>0)then
+       call mpi_test(reqpc(1),rpcflag(1),istat,ierr)
+       if(rpcflag(1)) then
+          ncmplt=ncmplt+pcomplete(1)
+          chd=tn%lchild
+          call mpi_irecv(pcomplete(1),1,MPI_INTEGER,chd,rpctag,&
+               & MPI_COMM_WORLD,reqpc(1),ierr)
+       endif
+    endif
+    if(tn%rchild>0)then
+       call mpi_test(reqpc(2),rpcflag(2),istat,ierr)
+       if(rpcflag(2)) then
+          ncmplt=ncmplt+pcomplete(2)
+          chd=tn%rchild
+          call mpi_irecv(pcomplete(2),1,MPI_INTEGER,chd,rpctag,&
+               & MPI_COMM_WORLD,reqpc(2),ierr)
+       endif
     endif
   end subroutine tallyPcomplete
 
