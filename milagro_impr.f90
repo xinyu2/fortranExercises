@@ -7,9 +7,9 @@ program milagroimpr
 ! TODO and wishlist:
 !***********************************************************************
   integer,parameter :: impi0=0 !the master rank
-  integer,parameter :: maxpars=8*2!1024*1024
+  integer,parameter :: maxpars=8*8!1024*1024
   integer,parameter :: BUFFSIZE=8,MAXSTEP=1
-  integer,parameter :: dimx=8,dimy=2,dimz=1
+  integer,parameter :: dimx=8,dimy=8,dimz=1
   integer,parameter :: rmpbtag=5,rpctag=10,rftag=15,sndtag=20,rbftag=20
   integer,parameter :: dmpi=1 !debug this mpi rank
 
@@ -198,8 +198,8 @@ program milagroimpr
   !     &        impi0,MPI_COMM_WORLD,ierr)
   !do while(.not.globalFinish)
   call recvMaxParBuff(impi,nbrs)
-  if(tn%parent>0) then
-     call recvChdParComplete
+  call recvChdParComplete
+  if(tn%parent>=0) then
      call recvParentFinish
   endif
   t1=mpi_wtime()
@@ -208,27 +208,27 @@ program milagroimpr
   endif
   do while(.not.globalFinish)
      it=it+1
-     !if (impi==0) then
-     !   write(6,*) '===> step ',it,globalFinish
-     !   call printPars(impi,ps)
-     !endif
+     if (impi==0) then
+        write(6,*) '===> step ',it,globalFinish
+     !  call printPars(impi,ps)
+     endif
      existLocalPar=getExistLocalPar(ps)
      if (existLocalPar) then
         call movePar(ps,pcmplt)
      endif
+     call tallyPcomplete(impi,tn,pcmplt)
      call recvBuffer(impi,ps,nbrs)
-     call tallyPcomplete(tn,pcmplt)
      existLocalPar=getExistLocalPar(ps)
      if (.not.existLocalPar) then
         do i=1,nmpi
            if(sndidx(i)>0) then
-              write(6,*) '@no local',impi,sndidx
               call sendBuffer(impi,sndbuff,sndidx,i-1)
            endif
         enddo
         if(impi==0) then
            if(pcmplt==maxpars) then
               globalFinish=.true.
+              write(6,*) '@0 global finish',it,globalFinish
               if(tn%lchild>0) then
                  call mpi_send(globalFinish,1,MPI_LOGICAL,tn%lchild,&
                       &rftag,MPI_COMM_WORLD,ierr)
@@ -258,19 +258,20 @@ program milagroimpr
         endif ! end slaves
      endif
      if(globalFinish) then
-        write(6,*) '@globalfinish',globalFinish
+        write(6,*) '@globalfinish',impi,globalFinish
         do i=1,nmpi
            flag=nbrs(impi+1,i)
            if(flag==1)then
               call mpi_cancel(reqrb(i),ierr)
            endif
         enddo
-        if(lmpi0) then
-           do i = 1,nmpi-1
+        do i = 1,2
+           if(reqpc(i)>0) then
               call mpi_cancel(reqpc(i),ierr)
-           enddo
-        endif
+           endif
+        enddo
      endif
+     !if (it>100) globalFinish=.true.
   enddo !tsp_it
   t2=mpi_wtime()
   write(6,'(A17,I5,A4,F6.2)') 'transport time, @',impi,' is ',t2-t1
@@ -849,23 +850,25 @@ contains
     enddo
   end subroutine recvBuffer
 
-  subroutine tallyPcomplete(tn,pcmplt)
+  subroutine tallyPcomplete(myrank,tn,ncmplt)
     implicit none
+    integer,intent(in)::myrank
     type(trnode),intent(in)::tn
-    integer,intent(inout)::pcmplt
+    integer,intent(inout)::ncmplt
     integer::i,idx,chd
     call mpi_testsome(2,reqpc,outreq,cmpind,istat,ierr)
     if(outreq>0) then
        do i=1,outreq
           idx=cmpind(i)
-          pcmplt=pcmplt+pcomplete(i)
+          ncmplt=ncmplt+pcomplete(i)
           if (idx==1) then
              chd=tn%lchild
           else
              chd=tn%rchild
           endif
-          call mpi_irecv(pcomplete(i),1,MPI_INTEGER,chd,rpctag,&
-               & MPI_COMM_WORLD,reqpc(i),ierr)
+          call mpi_irecv(pcomplete(idx),1,MPI_INTEGER,chd,rpctag,&
+               & MPI_COMM_WORLD,reqpc(idx),ierr)
+          !write(6,*) '@tally',myrank,ncmplt
        enddo
     endif
   end subroutine tallyPcomplete
