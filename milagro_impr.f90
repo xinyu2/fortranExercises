@@ -7,9 +7,9 @@ program milagroimpr
 ! TODO and wishlist:
 !***********************************************************************
   integer,parameter :: impi0=0 !the master rank
-  integer,parameter :: maxpars=8*8!1024*1024
-  integer,parameter :: BUFFSIZE=8,MAXSTEP=1
-  integer,parameter :: dimx=8,dimy=8,dimz=1
+  integer,parameter :: maxpars=1024*1024
+  integer,parameter :: BUFFSIZE=1024,MAXSTEP=1
+  integer,parameter :: dimx=1024,dimy=1024,dimz=1
   integer,parameter :: rmpbtag=5,rpctag=10,rftag=15,sndtag=20,rbftag=20
   integer,parameter :: dmpi=1 !debug this mpi rank
 
@@ -208,9 +208,12 @@ program milagroimpr
   endif
   do while(.not.globalFinish)
      it=it+1
-     if (impi==0) then
-        write(6,*) '===> step ',it,globalFinish
+     !if (impi==0) then
+     !   write(6,*) '===> step ',it,globalFinish
      !  call printPars(impi,ps)
+     !endif
+     if (pcmplt>maxpars) then
+        stop 'invalid pcmplt'
      endif
      existLocalPar=getExistLocalPar(ps)
      if (existLocalPar) then
