@@ -676,7 +676,7 @@ contains
     call random_seed(put=seed)
     do i=1,maxpars
        if(ps(i)%lalive) then
-          do idle=1,10000
+          do idle=1,40000
           enddo ! pretending computation
           dir=getDirection()
           step=getStep()
