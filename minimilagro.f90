@@ -7,7 +7,7 @@ program minimilagro
 ! TODO and wishlist:
 !***********************************************************************
   integer,parameter :: impi0=0 !the master rank
-  integer,parameter :: BUFFSIZE=6
+  integer,parameter :: BUFFSIZE=4
   integer,parameter :: maxpars=5
   integer,parameter :: dimx=8,dimy=8,dimz=1
   integer,parameter :: rmpbtag=5,rpctag=10,rftag=15,sndtag=20,rbftag=20
