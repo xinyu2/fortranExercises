@@ -13,6 +13,7 @@ c
 c
       integer,private,allocatable :: counts(:)
       integer,private,allocatable :: displs(:)
+      integer,allocatable :: dd_indexes(:)
 c
       save
 c
@@ -248,322 +249,132 @@ c!}}}
 c
 c
 c
-      subroutine scatter_inputstruct(ndim,icell1,ncell,igeom)
+      subroutine scatter_inputstruct(ndim,icell1,ncell)
 c     -------------------------------------------------!{{{
       use inputstrmod
       use gasmod
+      use rcbmod
+
       implicit none
-      integer,intent(in) :: ndim(3),igeom
+      integer,intent(in) :: ndim(3)
       integer,intent(out) :: icell1,ncell
+      !PK added
+      integer :: grid_test = 20
+      !change the order of compression
+      integer :: indexes(str_nc)
+      integer :: sizes(nmpi*3)
 ************************************************************************
 * mpi_scatter the input structure to all ranks in the worker comm.
 ************************************************************************
-      !-- milagro dd vars
-      integer :: i,n,nc,nx,ny,nz
-      integer :: edgelen,nboxes !,reorderidx
-      integer, dimension(:), allocatable :: corners
-!     milagro: reorder the origin arrays: str_mass,str_temp,etc
-      integer, dimension(:), allocatable :: arr_reorder
-!     milagro: store everything to be scattered in reordered index
-      real*8,allocatable :: arr_scatter(:) !(nc)
-      real*8,allocatable :: reorder_massfrdc(:,:) !(nabund,nc)
+      integer :: counter = 1
+      integer :: i,j,n,nx,ny,nz
+      real*8 :: helper(str_nc)
+      type(slimer), allocatable :: ghosts(:)
 c
       nx = ndim(1)
       ny = ndim(2)
       nz = ndim(3)
-
-      write(6,*) '>> nx=',nx, 'ny=',ny,'nz=',nz
-
-      if(impi==impi0) then
-         edgelen=getedge(nmpi,ndim,igeom) ! cube edge's length
-      endif
-
+      !PK
+      open(unit=grid_test, file="grid_test.out", action="write")
 c
 c-- calculate offsets
+      allocate(dd_indexes(str_nc))  !delete(realy???)
       allocate(counts(nmpi),displs(nmpi))
-      displs(1) = 0
-      nc = str_nc
+c
+      indexes(:) = (/((i), i=1, str_nc)/)
+      write(grid_test,*)'indexes@rank', impi,indexes
 
-!     milagro dd: put arrays to arr_reorder
-!     then scatter them by mpiscatterv
-!     this is done by master
-      if(impi==impi0) then
-         select case(igeom)
-         case(1,11) !arr_reorder=raw order(xyz)
-         case(2)
-!           call getCorners(nx,ny,edgelen,nboxes,corners)
-!           call getReorder(nx,edgelen,nboxes,corners,arr_reorder)
-            call getCorners3d(igeom,nx,ny,nz,edgelen,nboxes,corners)
-            call getReorder3d(igeom,nx,ny,nz,edgelen,nboxes,corners,
-     &                        arr_reorder)
-         case(3)
-            call getCorners3d(igeom,nx,ny,nz,edgelen,nboxes,corners)
-            call getReorder3d(igeom,nx,ny,nz,edgelen,nboxes,corners,
-     &                        arr_reorder)
-         case default
-            stop 'igeom invalid'
-         endselect
-      endif
+      deallocate(counts)
 
-      do i=1,nmpi
-       n = ceiling(nc/(nmpi-i+1d0))
-       counts(i) = n
-       if(i-1==impi) ncell = n
-       if(i-1==impi) icell1 = displs(i) + 1
-       if(i<nmpi) displs(i+1) = displs(i) + n
-       nc = nc - n
+      allocate(counts(0))
+
+      dd_indexes = bisect(indexes,nmpi,counter,nx,ny,nz,1,
+     &   nx*ny*nz,counts)
+
+      displs(1)=1
+      do i=2,nmpi
+        displs(i) = displs(i-1) + counts(i-1)
       enddo
 
-      if(sum(counts)/=str_nc) stop 'scatter_inputstr: counts/=str_nc'
-      if(nc/=0) stop 'scatter_inputstr: nc/=0'
+      call dimensions(dd_indexes, nx, ny, nz, counts,
+     &     displs, nmpi, sizes)
+      call ghost_busters(dd_indexes, nx, ny, nz, counts, displs,
+     & nmpi, sizes, ghosts)
 
-c
+      if (impi==0) then
+         do i=1, size(ghosts)
+            print*, 'GHOSTS', char(10), ghosts(i)%ighost
+         enddo
+      endif
+      !because before it started at 1...
+      displs = displs - 1
+
+      do i=1,nmpi
+        if(i-1==impi) ncell = counts(i)
+        if(i-1==impi) icell1 = displs(i) + 1
+      enddo
+
+c-- PK
+      write(grid_test,*)'after RCB@rank',impi,dd_indexes
+      write(grid_test,*)counts, char(10)
+      write(grid_test,*)displs, char(10)
+
+
+      close(grid_test)
+
 c-- allocate domain decomposed and domain compressed
-!     if(impi/=impi0) allocate(str_massdc(str_nc))
-!     milagro dd: use arr_scatter replace str_massdc
-      if(impi==impi0) call getScatter(igeom,str_nc,str_massdc,
-     &     arr_reorder,arr_scatter)
-      if(impi/=impi0) allocate(arr_scatter(str_nc))
+      if(impi/=impi0) allocate(str_massdc(str_nc))
+      do i=1,str_nc !should be the same as nx*ny*nz
+        helper(i)=str_massdc(dd_indexes(i))
+      enddo
+      str_massdc=helper
       allocate(str_massdd(ncell))
+      call mpi_scatterv(str_massdc,counts,displs,MPI_REAL8,
+     &  str_massdd,ncell,MPI_REAL8,
+     &  impi0,MPI_COMM_WORLD,ierr)
 
-!     call mpi_scatterv(str_massdc,counts,displs,MPI_REAL8,
-!     milagro dd: use arr_scatter replace str_massdc
-      call mpi_scatterv(arr_scatter,counts,displs,MPI_REAL8,
-     &        str_massdd,ncell,MPI_REAL8,
-     &        impi0,MPI_COMM_WORLD,ierr)
 c
 c-- mass fractions if available
       if(str_nabund>0) then
-!        if(impi/=impi0) allocate(str_massfrdc(str_nabund,str_nc))
-         if(impi==impi0) call getMassfrdc(igeom,str_nabund,
-     &     str_nc,str_massfrdc,arr_reorder,reorder_massfrdc)
-         if(impi/=impi0) allocate(reorder_massfrdc(str_nabund,str_nc))
-         allocate(str_massfrdd(str_nabund,ncell))
-         n = str_nabund
-!        call mpi_scatterv(str_massfrdc,n*counts,n*displs,MPI_REAL8,
-         call mpi_scatterv(reorder_massfrdc,n*counts,n*displs,MPI_REAL8,
-     &        str_massfrdd,n*ncell,MPI_REAL8,
-     &        impi0,MPI_COMM_WORLD,ierr)
+       if(impi/=impi0) allocate(str_massfrdc(str_nabund,str_nc))
+       do j=1,str_nabund
+         do i=1,str_nc
+           helper(i)=str_massfrdc(j,dd_indexes(i))
+         enddo
+         str_massfrdc(j,:)=helper
+       enddo
+       allocate(str_massfrdd(str_nabund,ncell))
+       n = str_nabund
+       call mpi_scatterv(str_massfrdc,n*counts,n*displs,MPI_REAL8,
+     &   str_massfrdd,n*ncell,MPI_REAL8,
+     &   impi0,MPI_COMM_WORLD,ierr)
       endif
 c
 c-- gas temperature structure if available
       if(str_ltemp) then
-        if(impi==impi0) call getScatter(igeom,str_nc,str_tempdc,
-     &        arr_reorder,arr_scatter)
-!      if(impi/=impi0) allocate(str_tempdc(str_nc))
-!      milagro dd: use arr_scatter replace str_tempdc
-       if(impi/=impi0) allocate(arr_scatter(str_nc))
+       if(impi/=impi0) allocate(str_tempdc(str_nc))
+       do i=1,str_nc !should be the same as nx*ny*nz
+         helper(i)=str_tempdc(dd_indexes(i))
+       enddo
+       str_tempdc=helper
        allocate(str_tempdd(ncell))
-!      call mpi_scatterv(str_tempdc,counts,displs,MPI_REAL8,
-!      milagro dd: use arr_scatter replace str_tempdc
-       call mpi_scatterv(arr_scatter,counts,displs,MPI_REAL8,
+       call mpi_scatterv(str_tempdc,counts,displs,MPI_REAL8,
      &  str_tempdd,ncell,MPI_REAL8,
      &  impi0,MPI_COMM_WORLD,ierr)
       endif
 c-- ye structure if available
       if(str_lye) then
-         if(impi==impi0) call getScatter(igeom,str_nc,str_yedc,
-     &        arr_reorder,arr_scatter)
-!        if(impi/=impi0) allocate(str_yedc(str_nc))
-!        milagro dd: use arr_scatter replace str_yedc
-         if(impi/=impi0) allocate(arr_scatter(str_nc))
-         allocate(str_yedd(ncell))
-!        call mpi_scatterv(str_yedc,counts,displs,MPI_REAL8,
-         call mpi_scatterv(arr_scatter,counts,displs,MPI_REAL8,
-     &        str_yedd,ncell,MPI_REAL8,
-     &        impi0,MPI_COMM_WORLD,ierr)
+        if(impi/=impi0) allocate(str_yedc(str_nc))
+        do i=1,str_nc !should be the same as nx*ny*nz
+          helper(i)=str_yedc(dd_indexes(i))
+        enddo
+        str_yedc=helper
+        allocate(str_yedd(ncell))
+        call mpi_scatterv(str_yedc,counts,displs,MPI_REAL8,
+     &    str_yedd,ncell,MPI_REAL8,
+     &    impi0,MPI_COMM_WORLD,ierr)
       endif
 !}}}
-
-      deallocate(arr_scatter)   !deallocate arr_scatter
-
-
-!     milagro dd function: get the length of edge
-!     2D, the length is sqrt of cells per rank
-!     3D, the length is cbrt of cells per rank
-      contains
-      integer function getedge(nmpi,ndim,igeom)
-      implicit none
-      integer,intent(in) :: nmpi,ndim(3),igeom
-      integer::l,nx,ny,nz,volume
-      real*8::tasks,temp
-
-      nx=ndim(1)
-      ny=ndim(2)
-      nz=ndim(3)
-
-      volume=nx*ny*nz
-      tasks=nmpi+0.0
-      temp=volume/tasks
-      write(6,*) '>> temp',temp
-      if(igeom==2) then
-         l=ceiling(temp**(1.0/2.0))
-         if (l*l*nmpi>volume) then
-            l=l-1               ! 2d l round up by 1 due to precision
-         endif
-      else if(igeom==3) then
-         l=ceiling(temp**(1.0/3.0))
-         if (l*l*l*nmpi>volume) then
-            l=l-1               ! 3d l round up by 1 due to precision
-         endif
-      else
-         l=ceiling(volume/tasks)
-         if (l*nmpi>volume) then
-            l=l-1               ! 1d l round up by 1 due to precision
-         endif
-      endif
-      getedge=l
-      write(6,*) '>> getEdge',l
-      end function getedge
-
-      subroutine getCorners(nx,ny,len,nboxes,pos)
-      implicit none
-      integer, intent(in)::nx,ny,len
-      integer, intent(out)::nboxes
-      integer,dimension(:),allocatable,intent(out) :: pos
-      integer::i,j,cc,p
-
-      nboxes=0
-      cc=(nx*ny)/(len*len)
-      allocate(pos(cc))
-      do j=1,ny,len
-         do i=1,nx,len
-            p=(j-1)*nx+i
-            nboxes=nboxes+1
-            pos(nboxes)=p
-         enddo                  !end x
-      enddo                     !end y
-      end subroutine getCorners
-
-
-      subroutine getReorder(nx,len,nboxes,corners,arr_reorder)
-      implicit none
-      integer,intent(in)::nx,len,nboxes
-      integer,dimension(:),intent(in)::corners
-      integer,dimension(:),allocatable,intent(out)::arr_reorder
-      integer::arr_size,i,j,k,l,idx,box_offset
-      arr_size=len*len*nboxes
-      allocate(arr_reorder(arr_size))
-      box_offset=0
-      l=0                       !l should == arr_size
-      do k=1,nboxes
-         box_offset=corners(k)-corners(1)
-         do j=1,len
-            do i=1,len
-               l=l+1
-               idx=(j-1)*nx+i+box_offset
-               arr_reorder(l)=idx
-            enddo
-         enddo
-      enddo
-      end subroutine getReorder
-
-      subroutine getCorners3d(igeom,nx,ny,nz,len,nboxes,pos)
-      implicit none
-      integer, intent(in)::igeom,nx,ny,nz,len
-      integer, intent(out)::nboxes
-      integer,dimension(:),allocatable,intent(out) :: pos
-      integer::i,j,k,cc,p,nodevol
-
-      nboxes=0
-      nodevol=getVolume(igeom,len)
-      cc=(nx*ny*nz)/nodevol ! number of processors
-      write(6,*) '>> corner > nv',nodevol,'igeom',igeom
-      allocate(pos(cc))
-      do k=1,nz,len
-         do j=1,ny,len
-            do i=1,nx,len
-               p=(k-1)*nx*ny+(j-1)*nx+i
-               nboxes=nboxes+1
-               pos(nboxes)=p
-            enddo               !end x
-         enddo                  !end y
-      enddo                     !end z
-      end subroutine getCorners3d
-
-      subroutine getReorder3d(igeom,nx,ny,nz,len,nboxes,corners,
-     &                        arr_reorder)
-      implicit none
-      integer,intent(in)::igeom,nx,ny,nz,len,nboxes
-      integer,dimension(:),intent(in)::corners
-      integer,dimension(:),allocatable,intent(out)::arr_reorder
-      integer::arr_size,i,j,k,l,m,idx,box_offset,nodevol
-      nodevol=getVolume(igeom,len)
-      arr_size=nodevol*nboxes ! total cells in domain
-
-      allocate(arr_reorder(arr_size))
-      box_offset=0
-      l=0                       !l should == arr_size
-      do m=1,nboxes
-         box_offset=corners(m)-corners(1)
-         do k=1,min(len,nz)
-            do j=1,len
-               do i=1,len
-                  l=l+1
-c--               write(6,*) '>> reorder m=',m,'k=',k,'j=',j,
-c-- &                       'i=',i,'l=',l
-                  idx=(k-1)*nx*ny+(j-1)*nx+i+box_offset
-                  arr_reorder(l)=idx
-               enddo            !end x
-            enddo               !end y
-         enddo                  !end z
-      enddo
-      end subroutine getReorder3d
-
-      subroutine getScatter(igeom,arr_size,in_arr,in_order,out_arr)
-      implicit none
-      integer,intent(in)::igeom,arr_size
-      real*8,dimension(:),intent(in)::in_arr
-      integer,dimension(:),intent(in)::in_order
-      real*8,dimension(:),allocatable,intent(out)::out_arr
-      integer::i,idx
-      allocate(out_arr(arr_size)) !allocate array to be scattered
-      if((igeom==1).or.(igeom==11)) then
-         do i=1,arr_size
-            out_arr(i)=in_arr(i)
-         enddo
-      else
-         do i=1,arr_size
-            idx=in_order(i)
-            out_arr(i)=in_arr(idx)
-         enddo
-      endif
-      end subroutine getScatter
-
-!     getMassfrdc(igeom,str_nabund,str_nc,str_massfrdc,
-!     &           arr_reorder,reorder_massfrdc)
-      subroutine getMassfrdc(igeom,nabund,arr_size,in_arr,
-     &                       in_order,out_arr)
-      implicit none
-      integer,intent(in)::igeom,nabund,arr_size
-      real*8,dimension(:,:),intent(in)::in_arr
-      integer,dimension(:),intent(in)::in_order
-      real*8,dimension(:,:),allocatable,intent(out)::out_arr
-      integer::i,idx
-      allocate(out_arr(nabund,arr_size)) !allocate array to be scattered
-      if((igeom==1).or.(igeom==11)) then
-         do i=1,arr_size
-            out_arr(:,i)=in_arr(:,i)
-         enddo
-      else
-         do i=1,arr_size
-            idx=in_order(i)
-            out_arr(:,i)=in_arr(:,idx)
-         enddo
-      endif
-      end subroutine getMassfrdc
-
-      integer function getVolume(igeom,len)
-      implicit none
-      integer,intent(in)::igeom,len
-      integer::v
-      if (igeom==2) then
-         v=len*len
-      else if(igeom==3) then
-         v=len*len*len
-      endif
-      getVolume=v
-      end function getVolume
       end subroutine scatter_inputstruct
 c
 c
@@ -573,12 +384,19 @@ c     -------------------------------
       use gridmod
       use gasmod
       implicit none
+      integer :: i
+      real*8 :: helper(grd_ncell)
 ************************************************************************
 * gather initial gas_eraddens to grd_evolinit
 ************************************************************************
       call mpi_allgatherv(gas_eraddens,gas_ncell,MPI_REAL8,
      &  grd_evolinit,counts,displs,MPI_REAL8,
      &  MPI_COMM_WORLD,ierr)
+c-- re-replicate
+      do i=1,grd_ncell !should be the same as nx*ny*nz
+        helper(dd_indexes(i))=grd_emitex(i)
+      enddo
+      grd_emitex=helper
       end subroutine allgather_initialrad
 c
 c
@@ -587,15 +405,29 @@ c     -----------------------------!{{{
       use gridmod
       use gasmod
       implicit none
+      integer :: i
+      real*8 :: helper(grd_ncell)
 ************************************************************************
 * gather gas_capgam to grd_capgam
 ************************************************************************
       call mpi_allgatherv(gas_emitex,gas_ncell,MPI_REAL8,
      &  grd_emitex,counts,displs,MPI_REAL8,
      &  MPI_COMM_WORLD,ierr)
+c-- re-replicate
+      do i=1,grd_ncell !should be the same as nx*ny*nz
+        helper(dd_indexes(i))=grd_emitex(i)
+      enddo
+      grd_emitex=helper
+c
       call mpi_allgatherv(gas_capgam,gas_ncell,MPI_REAL8,
      &  grd_capgam,counts,displs,MPI_REAL8,
-     &  MPI_COMM_WORLD,ierr)!}}}
+     &  MPI_COMM_WORLD,ierr)
+c-- re-replicate
+      do i=1,grd_ncell !should be the same as nx*ny*nz
+        helper(dd_indexes(i))=grd_capgam(i)
+      enddo
+      grd_capgam=helper
+c
       end subroutine allgather_gammacap
 c
 c
@@ -633,6 +465,7 @@ c     -----------------------------!{{{
       use particlemod
       use timingmod
       use transportmod, only:trn_noampfact
+      use inputstrmod, only:str_nc
       implicit none
 ************************************************************************
 * Broadcast the data that changes with time/temperature.
@@ -640,36 +473,84 @@ c     -----------------------------!{{{
       real*8 :: t0,t1
       real*8 :: sndgas(gas_ncell)
       real*8 :: sndgrd(grd_ncell)
-      integer :: nvacant
+      integer :: nvacant, i, j
+      real*8 :: helper(str_nc)
 c
       call mpi_barrier(MPI_COMM_WORLD,ierr)
       t0 = t_time()
 c
+c-- temporary sanity check; void cells not implemented for RCB
+      if(str_nc/=grd_ncell) stop
+     &   'bcast_nonpermanent: RCB not yet compatible with void cells'
+c
 c-- gather
       sndgas = 1d0/gas_temp
+
       call mpi_allgatherv(sndgas,gas_ncell,MPI_REAL8,
      &  grd_tempinv,counts,displs,MPI_REAL8,
      &  MPI_COMM_WORLD,ierr)
+c-- re-replicate
+      do i=1,str_nc !should be the same as nx*ny*nz
+        helper(dd_indexes(i))=grd_tempinv(i)
+      enddo
+      grd_tempinv=helper
+
       call mpi_allgatherv(gas_fcoef,gas_ncell,MPI_REAL8,
      &  grd_fcoef,counts,displs,MPI_REAL8,
      &  MPI_COMM_WORLD,ierr)
+c-- re-replicate
+      do i=1,str_nc !should be the same as nx*ny*nz
+        helper(dd_indexes(i))=grd_fcoef(i)
+      enddo
+      grd_fcoef=helper
+
       call mpi_allgatherv(gas_capgrey,gas_ncell,MPI_REAL8,
      &  grd_capgrey,counts,displs,MPI_REAL8,
      &  MPI_COMM_WORLD,ierr)
-c
+c-- re-replicate
+      do i=1,str_nc !should be the same as nx*ny*nz
+        helper(dd_indexes(i))=grd_capgrey(i)
+      enddo
+      grd_capgrey=helper
+
       call mpi_allgatherv(gas_emit,gas_ncell,MPI_REAL8,
      &  grd_emit,counts,displs,MPI_REAL8,
      &  MPI_COMM_WORLD,ierr)
+c-- re-replicate
+      do i=1,str_nc !should be the same as nx*ny*nz
+        helper(dd_indexes(i))=grd_emit(i)
+      enddo
+      grd_emit=helper
+
       call mpi_allgatherv(gas_emitex,gas_ncell,MPI_REAL8,
      &  grd_emitex,counts,displs,MPI_REAL8,
      &  MPI_COMM_WORLD,ierr)
-c
+c-- re-replicate
+      do i=1,str_nc !should be the same as nx*ny*nz
+        helper(dd_indexes(i))=grd_emitex(i)
+      enddo
+      grd_emitex=helper
+
       call mpi_allgatherv(gas_sig,gas_ncell,MPI_REAL8,
      &  grd_sig,counts,displs,MPI_REAL8,
      &  MPI_COMM_WORLD,ierr)
+c-- re-replicate
+      do i=1,str_nc !should be the same as nx*ny*nz
+        helper(dd_indexes(i))=grd_sig(i)
+      enddo
+      grd_sig=helper
+
       call mpi_allgatherv(gas_cap,grp_ng*gas_ncell,MPI_REAL,
      &  grd_cap,grp_ng*counts,grp_ng*displs,MPI_REAL,
      &  MPI_COMM_WORLD,ierr)
+c-- re-replicate
+      do j=1,grp_ng
+        do i=1,str_nc !should be the same as nx*ny*nz
+          helper(dd_indexes(i))=dble(grd_cap(j,i))
+        enddo
+        grd_cap(j,:)=sngl(helper)
+      enddo
+
 c
 c-- broadcast
       call mpi_bcast(tot_esurf,1,MPI_REAL8,
@@ -741,7 +622,7 @@ c     -----------------------!{{{
 * Reduce the results from particle_advance that are needed for the
 * temperature correction.
 ************************************************************************
-      integer :: n
+      integer :: i,n
       integer :: isnd2f(flx_nmu,flx_nom)
       real*8 :: snd2f(flx_nmu,flx_nom)
       integer,allocatable :: isnd(:)
@@ -749,6 +630,7 @@ c     -----------------------!{{{
       real*8,allocatable :: snd2(:,:)
       real*8 :: help
       real*8 :: t0,t1
+      real*8 :: helper(grd_ncell)
 c
       call mpi_barrier(MPI_COMM_WORLD,ierr)
       t0 = t_time()
@@ -800,11 +682,21 @@ c
 c-- scatter
       allocate(snd(grd_ncell))
       snd = grd_tally(1,:)
+c-- de-re-replicate before scattering
+      do i=1,grd_ncell
+        helper(i)=snd(dd_indexes(i))
+      enddo
+      snd=helper
       call mpi_scatterv(snd,counts,displs,MPI_REAL8,
      &  gas_edep,gas_ncell,MPI_REAL8,
      &  impi0,MPI_COMM_WORLD,ierr)
 c
       snd = grd_tally(2,:)
+c-- de-re-replicate before scattering
+      do i=1,grd_ncell
+        helper(i)=snd(dd_indexes(i))
+      enddo
+      snd=helper
       call mpi_scatterv(snd,counts,displs,MPI_REAL8,
      &  gas_eraddens,gas_ncell,MPI_REAL8,
      &  impi0,MPI_COMM_WORLD,ierr)
@@ -867,10 +759,11 @@ c     -------------------------------------!{{{
 ************************************************************************
 * for output
 ************************************************************************
-      integer :: n
+      integer :: i,n
       real*8,allocatable :: sndvec(:),rcvvec(:)
       real*8 :: sndgas(gas_ncell)
       real*8 :: t0,t1
+      real*8 :: helper(grd_ncell)
 c
       call mpi_barrier(MPI_COMM_WORLD,ierr)
       t0 = t_time()
@@ -879,6 +772,13 @@ c
       call mpi_gatherv(sndgas,gas_ncell,MPI_REAL8,
      &   grd_tempinv,counts,displs,MPI_REAL8,
      &   impi0,MPI_COMM_WORLD,ierr)
+c-- re-replicate
+      if(lmpi0) then
+        do i=1,grd_ncell
+          helper(dd_indexes(i))=grd_tempinv(i)
+        enddo
+        grd_tempinv=helper
+      endif
 c
 c-- dim==0
       n = 12
