@@ -92,7 +92,7 @@ program supernu
   call bcast_permanent !MPI
   call provide_inputpars(nmpi)
 !-- domain-decompose input structure
-  call scatter_inputstruct(in_ndim,icell1,ncell,in_igeom) !MPI
+  call scatter_inputstruct(in_ndim,icell1,ncell) !MPI
 
 !--
 !-- setup remaining modules
@@ -174,7 +174,7 @@ program supernu
      t_timelin(2) = t_time() !timeline
      if(in_srctype=='none' .and. .not.in_novolsrc) then
         call allgather_gammacap
-        call particle_advance_gamgrey(nmpi)
+        call particle_advance_gamgrey(impi,nmpi)
         call allreduce_gammaenergy !MPI
 !       grd_tally(1,:) = grd_emitex !for testing: local deposition
      else

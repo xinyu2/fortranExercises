@@ -254,6 +254,7 @@ c     -------------------------------------------------!{{{
       use inputstrmod
       use gasmod
       use rcbmod
+      use milagromod
 
       implicit none
       integer,intent(in) :: ndim(3)
@@ -263,6 +264,7 @@ c     -------------------------------------------------!{{{
       !change the order of compression
       integer :: indexes(str_nc)
       integer :: sizes(nmpi*3)
+      integer :: rdimx,rdimy,rdimz !dimx,dimy,dimz on each rank #chenx
 ************************************************************************
 * mpi_scatter the input structure to all ranks in the worker comm.
 ************************************************************************
@@ -270,6 +272,7 @@ c     -------------------------------------------------!{{{
       integer :: i,j,n,nx,ny,nz
       real*8 :: helper(str_nc)
       type(slimer), allocatable :: ghosts(:)
+      type(slimer) :: myGhosts
 c
       nx = ndim(1)
       ny = ndim(2)
@@ -287,7 +290,6 @@ c
       deallocate(counts)
 
       allocate(counts(0))
-
       dd_indexes = bisect(indexes,nmpi,counter,nx,ny,nz,1,
      &   nx*ny*nz,counts)
 
@@ -296,15 +298,25 @@ c
         displs(i) = displs(i-1) + counts(i-1)
       enddo
 
-      call dimensions(dd_indexes, nx, ny, nz, counts,
-     &     displs, nmpi, sizes)
-      call ghost_busters(dd_indexes, nx, ny, nz, counts, displs,
-     & nmpi, sizes, ghosts)
+      allocate(dd(nx*ny*nz))
+      call buildDictionary(dd_indexes,counts,displs,dd)
+!     =============================================================
+!     call dimensions(dd_indexes, nx, ny, nz, counts,
+!     &     displs, nmpi, sizes)
+!     print*,'sizes',sizes
+!      call ghost_busters(dd_indexes, nx, ny, nz, counts, displs,
+!     &     nmpi, sizes, ghosts)
+!     =============================================================      
+      call myDimensions(dd_indexes, nx, ny, nz, counts,
+     &     displs, nmpi, impi, rdimx,rdimy,rdimz)
+      call getGhost(dd_indexes,dd, nx, ny, nz, counts, displs,
+     & nmpi, impi, rdimx,rdimy,rdimz, myGhosts)
 
       if (impi==0) then
-         do i=1, size(ghosts)
-            print*, 'GHOSTS', char(10), ghosts(i)%ighost
-         enddo
+         !do i=1, size(ghosts)
+         !   print*, 'GHOSTS', char(10), ghosts(i)%ighost
+         !enddo
+         print*, 'GHOSTS', char(10), myGhosts%ighost
       endif
       !because before it started at 1...
       displs = displs - 1
@@ -822,7 +834,11 @@ c
 c
 c
       subroutine mpimod_dealloc
+      use milagromod
+c     -------------------------------------------------!{{{
+      implicit none
       deallocate(counts,displs)
+      if(allocated(dd)) deallocate(dd)
       end subroutine mpimod_dealloc
 c
       end module mpimod
