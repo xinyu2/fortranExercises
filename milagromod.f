@@ -34,7 +34,7 @@ c
 c     !***************************
 c     !* neighbor adjacent matrix
 c     !***************************
-      integer,dimension(:,:),allocatable :: nbrs !neighbor list for each rank
+      integer,dimension(:),allocatable :: nbrs !neighbor list for each rank
 c
 c     !***********
 c     !* tree
@@ -94,30 +94,5 @@ c
       enddo
       end subroutine buildDictionary
 c
-      subroutine getNeighbors(nmpi,nbrs,ghosts)
-      use rcbmod
-      implicit none
-      integer,intent(in)::nmpi
-      integer,dimension(:,:),intent(out),allocatable::nbrs
-      integer::i,j
-      allocate(nbrs(nmpi,nmpi))
-      !******************
-      !* initialize nbrs
-      !******************
-      do i=1,nmpi
-         do j=1,nmpi
-            nbrs(i,j)=0
-         enddo
-      enddo
-      !********************
-      !* nbrs for strip-dd
-      !********************
-      do i=1,nmpi
-         if(i>1) nbrs(i,i-1)=1
-         if(i<nmpi) nbrs(i,i+1)=1
-      enddo
-      nbrs(1,nmpi)=1            ! loop
-      nbrs(nmpi,1)=1            ! loop
-      end subroutine getNeighbors
       end module milagromod
 c vim: fdm=marker

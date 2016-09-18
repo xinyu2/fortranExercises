@@ -263,7 +263,6 @@ c     -------------------------------------------------!{{{
       integer :: grid_test = 20
       !change the order of compression
       integer :: indexes(str_nc)
-      integer :: sizes(nmpi*3)
       integer :: rdimx,rdimy,rdimz !dimx,dimy,dimz on each rank #chenx
 ************************************************************************
 * mpi_scatter the input structure to all ranks in the worker comm.
@@ -271,8 +270,7 @@ c     -------------------------------------------------!{{{
       integer :: counter = 1
       integer :: i,j,n,nx,ny,nz
       real*8 :: helper(str_nc)
-      type(slimer), allocatable :: ghosts(:)
-      type(slimer) :: myGhosts
+      type(cell), allocatable, dimension(:) :: myGhosts
 c
       nx = ndim(1)
       ny = ndim(2)
@@ -311,13 +309,10 @@ c
      &     displs, nmpi, impi, rdimx,rdimy,rdimz)
       call getGhost(dd_indexes,dd, nx, ny, nz, counts, displs,
      & nmpi, impi, rdimx,rdimy,rdimz, myGhosts)
+      call getNeighbors(nmpi,myGhosts,nbrs)
 
-      if (impi==0) then
-         !do i=1, size(ghosts)
-         !   print*, 'GHOSTS', char(10), ghosts(i)%ighost
-         !enddo
-         print*, 'GHOSTS', char(10), myGhosts%ighost
-      endif
+      !print*, 'GHOSTS', char(10), impi,pack(myGhosts,myGhosts%rid>-1)
+      !print*, 'NEIGHBORS', char(10), impi,nbrs
       !because before it started at 1...
       displs = displs - 1
 

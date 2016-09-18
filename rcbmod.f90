@@ -265,18 +265,18 @@ contains
 
   end subroutine check_neighbor
 
-  subroutine check_neighbor2(ighost,num_ghosts, dd, a_dum, counter, x_d, y_d, z_d, &
-       & side, outer, inner, nmpi, counts, displs, box, x,y,z)
+  subroutine check_neighbor2(myghosts, dd, a_dum, counter, x_d, y_d, z_d, &
+       & side, outer, inner,   box, x,y,z)
 
     implicit none
     integer, intent(in) :: x_d, y_d, z_d, side
-    integer, intent(in) :: nmpi, num_ghosts, outer, inner,  x, y, z
-    integer, intent(in), dimension(nmpi) :: counts, displs
+    integer, intent(in) :: outer, inner,  x, y, z
     integer, intent(in) :: box(x,y,z)
-    type(cell), intent(in), dimension(:) :: dd
+    type(cell), intent(in),    dimension(:) :: dd
     integer, intent(in) :: a_dum(x_d,y_d,z_d)
-    integer, intent(inout) :: ighost(num_ghosts),counter
-    integer :: escaped, look_i, look_n, index
+    type(cell), intent(inout), dimension(:) :: myghosts
+    integer, intent(inout) :: counter
+    integer :: escaped, look_i, look_n
     integer :: i, j, rank, one, two
     do j=1, outer
        do i=1, inner
@@ -359,15 +359,13 @@ contains
 
           !if particles escaped, assign rank=-1, hence out of boundary
           if(escaped == 1) then
-             ighost(counter-1) = -1
-             rank = -1
              !else, find the rank, which has the ghost cell
           else
-             ighost(counter-1) = look_n
+             myghosts(counter)%gid = look_n
              rank=dd(look_n)%rid
              !put rank #, which contains the ghost cell index into dictionary
-             ighost(counter) = rank
-             counter = counter + 2
+             myghosts(counter)%rid = rank
+             counter = counter + 1
           endif
        enddo
     enddo
@@ -434,9 +432,8 @@ contains
 
   end subroutine ghost_busters
 
-  subroutine getGhost(dd_a, dd, x_d, y_d, z_d, counts, displs, nmpi, impi, x,y,z, ghosts)
+  subroutine getGhost(dd_a, dd, x_d, y_d, z_d, counts, displs, nmpi, impi, x,y,z, myghosts)
     use gridmod
-
     implicit none
     integer,intent(in) :: x_d, y_d, z_d
     integer,intent(in) :: nmpi,impi
@@ -445,7 +442,7 @@ contains
     integer,intent(in),dimension(nmpi) :: counts, displs
     integer,intent(in) :: x,y,z
 
-    type(slimer), intent(out) :: ghosts
+    type(cell), intent(out),dimension(:),allocatable :: myghosts
 
     integer :: i, n, num_ghosts, counter
     integer, dimension(x_d*y_d*z_d) :: a
@@ -458,12 +455,10 @@ contains
     n=impi+1
     !iterate through all of the ranks
 
-    ghosts%rank = n
 
     allocate(box(x,y,z))
     box = reshape(dd_a(displs(n):displs(n)+counts(n)-1),(/x,y,z/))
 
-    num_ghosts = 2*(2*x*y + 2*x*z + 2*y*z)
     select case(grd_igeom)
     case(1,11)
        num_ghosts=4
@@ -475,28 +470,29 @@ contains
        stop 'invalid grd-igeom'
     end select
 
-    allocate(ghosts%ighost(num_ghosts))
-    ghosts%ighost = -1
-    counter = 2
+    allocate(myghosts(num_ghosts))
+    myghosts%gid = -1
+    myghosts%rid = -1
+    counter = 1
 
     !get ghosts of all 6 sides
-    call check_neighbor2(ghosts%ighost,num_ghosts, dd, a_dum, counter, &
-         & x_d, y_d, z_d, 1, y, x, nmpi, counts, displs, box, x,y,z)
+    call check_neighbor2(myghosts, dd, a_dum, counter, &
+         & x_d, y_d, z_d, 1, y, x,   box, x,y,z)
 
-    call check_neighbor2(ghosts%ighost,num_ghosts, dd, a_dum, counter, &
-         & x_d, y_d, z_d, 2, y, x, nmpi, counts, displs, box, x,y,z)
+    call check_neighbor2(myghosts, dd, a_dum, counter, &
+         & x_d, y_d, z_d, 2, y, x,   box, x,y,z)
 
-    call check_neighbor2(ghosts%ighost,num_ghosts, dd, a_dum, counter, &
-         & x_d, y_d, z_d, 3, z, x, nmpi, counts, displs, box, x,y,z)
+    call check_neighbor2(myghosts, dd, a_dum, counter, &
+         & x_d, y_d, z_d, 3, z, x,   box, x,y,z)
 
-    call check_neighbor2(ghosts%ighost,num_ghosts, dd, a_dum, counter, &
-         & x_d, y_d, z_d, 4, z, x, nmpi, counts, displs, box, x,y,z)
+    call check_neighbor2(myghosts, dd, a_dum, counter, &
+         & x_d, y_d, z_d, 4, z, x,   box, x,y,z)
 
-    call check_neighbor2(ghosts%ighost,num_ghosts, dd, a_dum, counter, &
-         & x_d, y_d, z_d, 5, z, y, nmpi, counts, displs, box, x,y,z)
+    call check_neighbor2(myghosts, dd, a_dum, counter, &
+         & x_d, y_d, z_d, 5, z, y,   box, x,y,z)
 
-    call check_neighbor2(ghosts%ighost,num_ghosts, dd, a_dum, counter, &
-         & x_d, y_d, z_d, 6, z, y, nmpi, counts, displs, box, x,y,z)
+    call check_neighbor2(myghosts, dd, a_dum, counter, &
+         & x_d, y_d, z_d, 6, z, y,   box, x,y,z)
     deallocate(box)
   end subroutine getGhost
 
@@ -593,4 +589,23 @@ contains
 
   end subroutine myDimensions
 
+  subroutine getNeighbors(nmpi,myghosts,nbrs)
+    implicit none
+    integer,intent(in)::nmpi
+    type(cell),intent(in),dimension(:) :: myghosts
+    integer,dimension(:),intent(out),allocatable::nbrs
+    integer::i,r
+    allocate(nbrs(nmpi))
+    !******************
+    !* initialize nbrs
+    !******************
+    nbrs=0
+    !********************
+    !* nbrs for strip-dd
+    !********************
+    do i=1,size(pack(myghosts%rid,myghosts%rid>-1))
+       r=myghosts(i)%rid
+       nbrs(r+1)=1
+    enddo
+  end subroutine getNeighbors
 end module rcbmod
