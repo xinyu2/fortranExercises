@@ -29,9 +29,9 @@ subroutine particle_advance_gamgrey(impi,nmpi)
   !total subroutine calls in program.
 !##################################################
   integer :: ierr
-  integer :: nhere, nemit, ndmy
+  !integer :: nhere, nemit, ndmy -- chenx
   real*8 :: r1, edep, help
-  integer :: i,j,k,l, ii, iimpi,gas_idx
+  integer :: i,j,k,l, ii, iimpi !,gas_idx -- chenx
   integer :: imu, iom, icold
   integer,pointer :: ic
   integer,pointer :: ix, iy, iz
@@ -132,6 +132,7 @@ subroutine particle_advance_gamgrey(impi,nmpi)
   !enddo
   !enddo
   !enddo
+
 
 !$omp parallel &
 !$omp shared(nvol) &
