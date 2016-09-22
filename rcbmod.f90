@@ -267,7 +267,6 @@ contains
 
   subroutine check_neighbor2(myghosts, dd, a_dum, counter, x_d, y_d, z_d, &
        & side, outer, inner,   box, x,y,z)
-
     implicit none
     integer, intent(in) :: x_d, y_d, z_d, side
     integer, intent(in) :: outer, inner,  x, y, z
@@ -355,7 +354,6 @@ contains
              stop 'invalid side'
           end select
           !put ghost cell index into dictionary
-
 
           !if particles escaped, assign rank=-1, hence out of boundary
           if(escaped == 1) then
@@ -589,17 +587,19 @@ contains
 
   end subroutine myDimensions
 
-  subroutine getNeighbors(nmpi,myghosts,nbrs)
+  subroutine getNeighbors(nmpi,myghosts,nbrs,totnbr)
     implicit none
     integer,intent(in)::nmpi
     type(cell),intent(in),dimension(:) :: myghosts
     integer,dimension(:),intent(out),allocatable::nbrs
+    integer,intent(out) :: totnbr
     integer::i,r
     allocate(nbrs(nmpi))
     !******************
     !* initialize nbrs
     !******************
     nbrs=0
+    totnbr=0
     !********************
     !* nbrs for strip-dd
     !********************
@@ -607,5 +607,6 @@ contains
        r=myghosts(i)%rid
        nbrs(r+1)=1
     enddo
+    totnbr=size(pack(nbrs,nbrs==1))
   end subroutine getNeighbors
 end module rcbmod
