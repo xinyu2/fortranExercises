@@ -1,10 +1,12 @@
 *This file is part of SuperNu.  SuperNu is released under the terms of the GNU GPLv3, see COPYING.
 *Copyright (c) 2013-2015 Ryan T. Wollaeger and Daniel R. van Rossum.  All rights reserved.
       module milagromod
+      use particlemod
 c     -------------------
       implicit none
       INCLUDE 'mpif.h'
 c
+      integer,parameter :: BUFFSIZE=128
       integer,private :: ierr,it,istat(MPI_STATUS_SIZE),i,ii
       integer,parameter :: rmpbtag=5,rpctag=10,rftag=15,sndtag=20,
      &rbftag=20
@@ -17,6 +19,8 @@ c     !* reqgf:  global finish
 c     !* rbflag: receive buffer flag
 c     !********************************
       integer,dimension(:),allocatable :: pcomplete  ! array for number of particle complete on master
+      logical :: globalFinish   ! global finish tag on slaves
+      integer :: pcmplt         ! number of particle complete on slave(cross boundary)
       integer,dimension(:),allocatable :: reqrb,reqpc,cmpind
       integer :: reqgf,outreq
       logical,dimension(:),allocatable :: rbflag,rpcflag
@@ -35,6 +39,13 @@ c     !***************************
 c     !* neighbor adjacent matrix
 c     !***************************
       integer,dimension(:),allocatable :: nbrs !neighbor list for each rank
+      integer :: totnbr ! total number of neighbors for each rank
+      integer :: flag           ! adjacency flag between neighbors
+c     !***************************
+c     !* send/receive buffer
+c     !***************************
+      type(packet),allocatable,target  :: sndbuff(:,:), rcvbuff(:,:)
+      type(packet2),allocatable,target :: sndbuff2(:,:),rcvbuff2(:,:)
 c
 c     !***********
 c     !* tree
@@ -94,5 +105,54 @@ c
       enddo
       end subroutine buildDictionary
 c
+      integer function getParent(myrank)
+      implicit none
+      integer,intent(in)::myrank
+      integer::p
+      if(myrank==0) then
+         p=-1
+      else
+         if(isOdd(myrank)) then
+            p=(myrank-1)/2
+         else
+            p=myrank/2-1
+         endif
+      endif
+      getParent=p
+      end function getParent
+
+      integer function getLChild(myrank,maxrank)
+      implicit none
+      integer,intent(in)::myrank,maxrank
+      integer::lchd
+      lchd=myrank*2+1
+      if (lchd>=maxrank) then
+         lchd=-1
+      endif
+      getLChild=lchd
+      end function getLChild
+
+      integer function getRChild(myrank,maxrank)
+      implicit none
+      integer,intent(in)::myrank,maxrank
+      integer::rchd
+      rchd=(myrank+1)*2
+      if (rchd>=maxrank) then
+         rchd=-1
+      endif
+      getRChild=rchd
+      end function getRChild
+
+      logical function isOdd(myrank)
+      implicit none
+      integer,intent(in)::myrank
+      logical::l
+      l=.false.
+      if(mod(myrank,2)==0) then
+      else
+         l=.true.
+      endif
+      isOdd=l
+      end function isOdd
       end module milagromod
 c vim: fdm=marker
