@@ -26,6 +26,7 @@ program supernu
   use timingmod
   use countersmod
 
+  use milagromod !chenx
   implicit none
 !***********************************************************************
 ! TODO and wishlist:
@@ -93,7 +94,6 @@ program supernu
   call provide_inputpars(nmpi)
 !-- domain-decompose input structure
   call scatter_inputstruct(in_ndim,icell1,ncell) !MPI
-
 !--
 !-- setup remaining modules
 !==========================
@@ -108,7 +108,7 @@ program supernu
   call grid_setup
 !-- setup gas
   call gasmod_init(lmpi0,icell1,ncell,grp_ng)
-  call gas_setup
+  call gas_setup(dd_indexes) !chenx
 !-- inputstr no longer needed
   call inputstr_dealloc
 

@@ -133,7 +133,6 @@ subroutine particle_advance_gamgrey(impi,nmpi)
   !enddo
   !enddo
 
-
 !$omp parallel &
 !$omp shared(nvol) &
 !$omp private(ptcl,ptcl2,x0,y0,z0,mu0,om0,cmffact,gm,mu1,mu2,eta,xi,labfact,iom,imu, &
@@ -171,6 +170,7 @@ subroutine particle_advance_gamgrey(impi,nmpi)
      i = ipospart(1,ipart)
      j = ipospart(2,ipart)
      k = ipospart(3,ipart)
+
 !-- adopt position (get rid of this copy after merged with wlT branch)
      ix = i
      iy = j
@@ -287,77 +287,7 @@ subroutine particle_advance_gamgrey(impi,nmpi)
 
      ptcl2%stat = 'live'
 !
-     do while (ptcl2%stat=='live')
-        ptcl2%istep = ptcl2%istep + 1
-        icold = ic
-        call transport_gamgrey(ptcl,ptcl2,rndstate,edep,ierr)
-!-- tally
-        grd_tally(1,icold) = grd_tally(1,icold) + edep
-
-!-- Russian roulette for termination of exhausted particles
-        if(e<1d-6*e0 .and. ptcl2%stat=='live' .and. grd_capgam(ic)>0d0) then
-           call rnd_r(r1,rndstate)!{{{
-           if(r1<0.5d0) then
-!-- transformation factor
-              if(grd_isvelocity) then
-                 select case(grd_igeom)
-                 case(1,11)
-                    labfact = 1.0d0 - mu*x/pc_c
-                 case(2)
-                    labfact = 1d0-(mu*y+sqrt(1d0-mu**2) * &
-                         cos(om)*x)/pc_c
-                 case(3)
-                    labfact = 1d0-(mu*z+sqrt(1d0-mu**2) * &
-                         (cos(om)*x+sin(om)*y))/pc_c
-                 endselect
-              else
-                 labfact = 1d0
-              endif
-!
-              ptcl2%stat = 'dead'
-              grd_tally(1,ic) = grd_tally(1,ic) + e*labfact
-           else
-              e = 2d0*e
-              e0 = 2d0*e0
-           endif!}}}
-        endif
-
-!-- verify position
-        if(ptcl2%stat=='live') then
-           if(x>grd_xarr(ix+1) .or. x<grd_xarr(ix) .or. x/=x) then
-              if(ierr==0) ierr = -99
-              write(0,*) 'prt_adv_ggrey: x not in cell', &
-                ix,x,grd_xarr(ix),grd_xarr(ix+1)
-           endif
-           if(y>grd_yarr(iy+1) .or. y<grd_yarr(iy) .or. y/=y) then
-              if(ierr==0) ierr = -99
-              write(0,*) 'prt_adv_ggrey: y not in cell', &
-                iy,y,grd_yarr(iy),grd_yarr(iy+1)
-           endif
-           if(z>grd_zarr(iz+1) .or. z<grd_zarr(iz) .or. z/=z) then
-              if(ierr==0) ierr = -99
-              write(0,*) 'prt_adv_ggrey: z not in cell', &
-                iz,z,grd_zarr(iz),grd_zarr(iz+1)
-           endif
-        endif
-
-!-- check for errors
-        if(ierr/=0 .or. ptcl2%istep>1000) then
-           write(0,*) 'pagg: ierr,ipart,istep,idist:',ierr,ptcl2%ipart,ptcl2%istep,ptcl2%idist
-           write(0,*) 'dist:',ptcl2%dist
-           write(0,*) 't:',ptcl%t
-           write(0,*) 'ix,iy,iz,ic,ig:',ptcl2%ix,ptcl2%iy,ptcl2%iz,ptcl2%ic,ptcl2%ig
-           write(0,*) 'x,y,z:',ptcl%x,ptcl%y,ptcl%z
-           write(0,*) 'mu,om:',ptcl%mu,ptcl%om
-           write(0,*) 'mux,muy,muz:',ptcl2%mux,ptcl2%muy,ptcl2%muz
-           write(0,*)
-           if(ierr>0) then
-              if(trn_errorfatal) stop 'particle_advance_gg: fatal transport error'
-              ptcl2%stat = 'dead'
-              exit
-           endif
-        endif
-     enddo
+     call movePar(ptcl,ptcl2,rndstate)
 !
 !-- outbound luminosity tally
      if(ptcl2%stat=='flux') then
@@ -414,5 +344,82 @@ contains
     ix=idx-(iz-1)*grd_nx*grd_ny-(iy-1)*grd_nx
   end subroutine reverseMapping
 
+  subroutine movePar(ptcl,ptcl2,rndstate)
+    implicit none
+    type(packet),target,intent(inout) :: ptcl
+    type(packet2),target,intent(inout) :: ptcl2
+    type(rnd_t),intent(inout) :: rndstate
+    do while (ptcl2%stat=='live')
+       ptcl2%istep = ptcl2%istep + 1
+       icold = ptcl2%ic
+       call transport_gamgrey(ptcl,ptcl2,rndstate,edep,ierr)
+!-- tally
+       grd_tally(1,icold) = grd_tally(1,icold) + edep
+
+!-- Russian roulette for termination of exhausted particles
+       if(ptcl%e<1d-6*e0 .and. ptcl2%stat=='live' .and. grd_capgam(ptcl2%ic)>0d0) then
+          call rnd_r(r1,rndstate)!{{{
+          if(r1<0.5d0) then
+!-- transformation factor
+             if(grd_isvelocity) then
+                select case(grd_igeom)
+                case(1,11)
+                   labfact = 1.0d0 - ptcl%mu*x/pc_c
+                case(2)
+                   labfact = 1d0-(ptcl%mu*ptcl%y+sqrt(1d0-ptcl%mu**2) * &
+                        cos(ptcl%om)*ptcl%x)/pc_c
+                case(3)
+                   labfact = 1d0-(ptcl%mu*ptcl%z+sqrt(1d0-ptcl%mu**2) * &
+                        (cos(ptcl%om)*ptcl%x+sin(ptcl%om)*ptcl%y))/pc_c
+                endselect
+             else
+                labfact = 1d0
+             endif
+!
+             ptcl2%stat = 'dead'
+             grd_tally(1,ptcl2%ic) = grd_tally(1,ptcl2%ic) + ptcl%e*labfact
+          else
+             ptcl%e = 2d0*ptcl%e
+             ptcl%e0 = 2d0*ptcl%e0
+          endif!}}}
+       endif
+
+!-- verify position
+       if(ptcl2%stat=='live') then
+          if(ptcl%x>grd_xarr(ptcl2%ix+1) .or. ptcl%x<grd_xarr(ptcl2%ix) .or. ptcl%x/=ptcl%x) then
+             if(ierr==0) ierr = -99
+             write(0,*) 'prt_adv_ggrey: x not in cell', &
+                  ptcl2%ix,ptcl%x,grd_xarr(ptcl2%ix),grd_xarr(ptcl2%ix+1)
+          endif
+          if(ptcl%y>grd_yarr(ptcl2%iy+1) .or. ptcl%y<grd_yarr(ptcl2%iy) .or. ptcl%y/=ptcl%y) then
+             if(ierr==0) ierr = -99
+             write(0,*) 'prt_adv_ggrey: y not in cell', &
+                  ptcl2%iy,ptcl%y,grd_yarr(ptcl2%iy),grd_yarr(ptcl2%iy+1)
+          endif
+          if(ptcl%z>grd_zarr(ptcl2%iz+1) .or. ptcl%z<grd_zarr(ptcl2%iz) .or. ptcl%z/=ptcl%z) then
+             if(ierr==0) ierr = -99
+             write(0,*) 'prt_adv_ggrey: z not in cell', &
+                  ptcl2%iz,ptcl%z,grd_zarr(ptcl2%iz),grd_zarr(ptcl2%iz+1)
+          endif
+       endif
+
+!-- check for errors
+       if(ierr/=0 .or. ptcl2%istep>1000) then
+          write(0,*) 'pagg: ierr,ipart,istep,idist:',ierr,ptcl2%ipart,ptcl2%istep,ptcl2%idist
+          write(0,*) 'dist:',ptcl2%dist
+          write(0,*) 't:',ptcl%t
+          write(0,*) 'ix,iy,iz,ic,ig:',ptcl2%ix,ptcl2%iy,ptcl2%iz,ptcl2%ic,ptcl2%ig
+          write(0,*) 'x,y,z:',ptcl%x,ptcl%y,ptcl%z
+          write(0,*) 'mu,om:',ptcl%mu,ptcl%om
+          write(0,*) 'mux,muy,muz:',ptcl2%mux,ptcl2%muy,ptcl2%muz
+          write(0,*)
+          if(ierr>0) then
+             if(trn_errorfatal) stop 'particle_advance_gg: fatal transport error'
+             ptcl2%stat = 'dead'
+             exit
+          endif
+       endif
+    enddo
+  end subroutine movePar
 end subroutine particle_advance_gamgrey
 ! vim: fdm=marker

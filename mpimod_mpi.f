@@ -1,19 +1,20 @@
 *This file is part of SuperNu.  SuperNu is released under the terms of the GNU GPLv3, see COPYING.
 *Copyright (c) 2013-2015 Ryan T. Wollaeger and Daniel R. van Rossum.  All rights reserved.
       module mpimod
+      use milagromod
 c     -------------
       implicit none
-      INCLUDE 'mpif.h'
+c     INCLUDE 'mpif.h'
 c
       integer,parameter :: impi0=0 !the master rank
       logical :: lmpi0 !true for the master rank
       integer :: impi !mpi rank
-      integer :: nmpi !number of mpi tasks
+      integer :: nmpi           !number of mpi tasks
+      integer,allocatable :: dd_indexes(:)
       integer,private :: ierr
 c
       integer,private,allocatable :: counts(:)
       integer,private,allocatable :: displs(:)
-      integer,allocatable :: dd_indexes(:)
 c
       save
 c
@@ -254,7 +255,6 @@ c     -------------------------------------------------!{{{
       use inputstrmod
       use gasmod
       use rcbmod
-      use milagromod
 
       implicit none
       integer,intent(in) :: ndim(3)
@@ -279,7 +279,7 @@ c
       open(unit=grid_test, file="grid_test.out", action="write")
 c
 c-- calculate offsets
-      allocate(dd_indexes(str_nc))  !delete(realy???)
+      allocate(dd_indexes(str_nc)) !delete(realy???)
       allocate(counts(nmpi),displs(nmpi))
 c
       indexes(:) = (/((i), i=1, str_nc)/)
@@ -309,7 +309,17 @@ c
      &     displs, nmpi, impi, rdimx,rdimy,rdimz)
       call getGhost(dd_indexes,dd, nx, ny, nz, counts, displs,
      & nmpi, impi, rdimx,rdimy,rdimz, myGhosts)
-      call getNeighbors(nmpi,myGhosts,nbrs)
+      call getNeighbors(nmpi,myGhosts,nbrs,totnbr)
+
+!     *****************************
+!     * construct communicate tree
+!     *****************************
+      tn%parent=getParent(impi)
+      tn%lchild=getLChild(impi,nmpi)
+      tn%rchild=getRChild(impi,nmpi)
+!     write(6,'(A1,I4,A8,I4,A6,I4,A6,I4)') '@',impi,
+!    &' parent=',tn%parent,' lchd=',tn%lchild,' rchd=',tn%rchild
+
 
       !print*, 'GHOSTS', char(10), impi,pack(myGhosts,myGhosts%rid>-1)
       !print*, 'NEIGHBORS', char(10), impi,nbrs
@@ -829,7 +839,7 @@ c
 c
 c
       subroutine mpimod_dealloc
-      use milagromod
+c     use milagromod
 c     -------------------------------------------------!{{{
       implicit none
       deallocate(counts,displs)
