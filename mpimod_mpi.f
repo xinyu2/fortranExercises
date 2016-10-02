@@ -255,6 +255,7 @@ c     -------------------------------------------------!{{{
       use inputstrmod
       use gasmod
       use rcbmod
+      use inputparmod,only:in_nomp
 
       implicit none
       integer,intent(in) :: ndim(3)
@@ -270,7 +271,7 @@ c     -------------------------------------------------!{{{
       integer :: counter = 1
       integer :: i,j,n,nx,ny,nz
       real*8 :: helper(str_nc)
-      type(cell), allocatable, dimension(:) :: myGhosts
+      !type(cell), allocatable, dimension(:) :: myGhosts
 c
       nx = ndim(1)
       ny = ndim(2)
@@ -310,7 +311,8 @@ c
       call getGhost(dd_indexes,dd, nx, ny, nz, counts, displs,
      & nmpi, impi, rdimx,rdimy,rdimz, myGhosts)
       call getNeighbors(nmpi,myGhosts,nbrs,totnbr)
-
+      call nbrDict(nmpi,totnbr,nbrs,db2r)
+      call initBuffer(impi,totnbr,in_nomp) ! chenx
 !     *****************************
 !     * construct communicate tree
 !     *****************************
@@ -391,6 +393,10 @@ c-- ye structure if available
      &    str_yedd,ncell,MPI_REAL8,
      &    impi0,MPI_COMM_WORLD,ierr)
       endif
+
+      str_ddcell=dd_indexes
+      call mpi_bcast(str_ddcell,str_nc,MPI_INTEGER,
+     &  impi0,MPI_COMM_WORLD,ierr)
 !}}}
       end subroutine scatter_inputstruct
 c

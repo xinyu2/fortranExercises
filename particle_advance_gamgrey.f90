@@ -33,6 +33,7 @@ subroutine particle_advance_gamgrey(impi,nmpi)
   real*8 :: r1, edep, help
   integer :: i,j,k,l, ii, iimpi !,gas_idx -- chenx
   integer :: imu, iom, icold
+  integer :: r,newrank ! chenx
   integer,pointer :: ic
   integer,pointer :: ix, iy, iz
   real*8,pointer :: x,y,z,mu,om,e,e0
@@ -56,10 +57,14 @@ subroutine particle_advance_gamgrey(impi,nmpi)
 !
   type(packet),target :: ptcl
   type(packet2),target :: ptcl2
+! chenx
+  integer,parameter::highint=1000000000
+  integer::rnkhigh
 !
 !-- start clock
   t0 = t_time()
 
+  rnkhigh = 0 !chenx
   grd_tally = 0d0
   flx_gamlumtime = 0d0
   flx_gamluminos = 0d0
@@ -133,19 +138,29 @@ subroutine particle_advance_gamgrey(impi,nmpi)
   !enddo
   !enddo
 
+  call recvMaxParBuff(impi,db2r)
+  call recvChdParComplete
+  if(tn%parent>=0) then
+     call recvParentFinish
+  endif
 !$omp parallel &
 !$omp shared(nvol) &
 !$omp private(ptcl,ptcl2,x0,y0,z0,mu0,om0,cmffact,gm,mu1,mu2,eta,xi,labfact,iom,imu, &
 !$omp    rndstate,edep,ierr, iomp, &
 !$omp    x,y,z,mu,om,e,e0,ix,iy,iz,ic,icold,r1, &
-!$omp    i,j,k) &
+!$omp    i,j,k, newrank, r, sndbuff, sndbuff2, sndbf, sndidx) &
 !$omp reduction(+:grd_tally,flx_gamluminos,flx_gamlumnum, &
-!$omp    flx_gamlumdev,flx_gamlumtime)
+!$omp    flx_gamlumdev,flx_gamlumtime,ipcmplt)
 
 !-- thread id
 !$ iomp = omp_get_thread_num()
   rndstate = rnd_states(iomp+1)
-
+  sndidx=0                                                ! chenx
+  sndbuff=packet(0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0)     ! chenx
+  sndbuff2=packet2(0.0,0.0,0.0,0.0,' ',0,0,0,0,0,0,0,0,0) ! chenx
+  sndbf%pb1=packet(0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0)   ! chenx
+  sndbf%pb2=packet2(0.0,0.0,0.0,0.0,' ',0,0,0,0,0,0,0,0,0)! chenx
+  ipcmplt = 0                                             ! chenx
 !
 !-- primary particle properties
   x => ptcl%x
@@ -165,12 +180,18 @@ subroutine particle_advance_gamgrey(impi,nmpi)
   y = grd_yarr(1)
   z = grd_zarr(1)
 
+!=========================================
+! omp loop for local gamma
+! 1)initialize
+! 2)move while 'live'
+! 3)tally
+!=========================================
 !$omp do schedule(static,1) !round-robin
-  do ipart=1,npart
+!  do ipart=1,npart
+  do ipart=npart,1,-1
      i = ipospart(1,ipart)
      j = ipospart(2,ipart)
      k = ipospart(3,ipart)
-
 !-- adopt position (get rid of this copy after merged with wlT branch)
      ix = i
      iy = j
@@ -281,16 +302,113 @@ subroutine particle_advance_gamgrey(impi,nmpi)
 
 !-----------------------------------------------------------------------
 !-- Advancing particle until census, absorption, or escape from domain
-     ptcl2%ipart = ipart
+     if(rnkhigh==0) then
+        rnkhigh=(impi+1)*(highint/(10**ceiling(log10(nmpi+0.0))))
+     endif !chenx
+     ptcl2%ipart = ipart + rnkhigh
      ptcl2%istep = 0
      ptcl2%idist = 0
 
      ptcl2%stat = 'live'
 !
-     call movePar(ptcl,ptcl2,rndstate)
+!    @@@ call movePar(ptcl,ptcl2,rndstate)
+     do while (ptcl2%stat=='live')
+        ptcl2%istep = ptcl2%istep + 1
+        icold = ptcl2%ic
+        call transport_gamgrey(ptcl,ptcl2,rndstate,edep,ierr)
+        !if(ptcl2%stat=='buff') then
+        !   write(6,*) '@> p',ptcl2%ipart,'ic',ptcl2%ic,'icold',icold,'stat',ptcl2%stat
+        !endif
+!-- tally
+        grd_tally(1,icold) = grd_tally(1,icold) + edep
+
+!-- Russian roulette for termination of exhausted particles
+        if(ptcl%e<1d-6*e0 .and. ptcl2%stat=='live' .and. grd_capgam(ptcl2%ic)>0d0) then
+           call rnd_r(r1,rndstate)!{{{
+           if(r1<0.5d0) then
+!-- transformation factor
+              if(grd_isvelocity) then
+                 select case(grd_igeom)
+                 case(1,11)
+                    labfact = 1.0d0 - ptcl%mu*x/pc_c
+                 case(2)
+                    labfact = 1d0-(ptcl%mu*ptcl%y+sqrt(1d0-ptcl%mu**2) * &
+                         cos(ptcl%om)*ptcl%x)/pc_c
+                 case(3)
+                    labfact = 1d0-(ptcl%mu*ptcl%z+sqrt(1d0-ptcl%mu**2) * &
+                         (cos(ptcl%om)*ptcl%x+sin(ptcl%om)*ptcl%y))/pc_c
+                 endselect
+              else
+                 labfact = 1d0
+              endif
+!
+              ptcl2%stat = 'dead'
+              grd_tally(1,ptcl2%ic) = grd_tally(1,ptcl2%ic) + ptcl%e*labfact
+           else
+              ptcl%e = 2d0*ptcl%e
+              ptcl%e0 = 2d0*ptcl%e0
+           endif!}}}
+        endif
+
+!-- verify position
+        if(ptcl2%stat=='live') then
+           if(ptcl%x>grd_xarr(ptcl2%ix+1) .or. ptcl%x<grd_xarr(ptcl2%ix) .or. ptcl%x/=ptcl%x) then
+              if(ierr==0) ierr = -99
+              write(0,*) 'prt_adv_ggrey: x not in cell', &
+                   ptcl2%ix,ptcl%x,grd_xarr(ptcl2%ix),grd_xarr(ptcl2%ix+1)
+           endif
+           if(ptcl%y>grd_yarr(ptcl2%iy+1) .or. ptcl%y<grd_yarr(ptcl2%iy) .or. ptcl%y/=ptcl%y) then
+              if(ierr==0) ierr = -99
+              write(0,*) 'prt_adv_ggrey: y not in cell', &
+                   ptcl2%iy,ptcl%y,grd_yarr(ptcl2%iy),grd_yarr(ptcl2%iy+1)
+           endif
+           if(ptcl%z>grd_zarr(ptcl2%iz+1) .or. ptcl%z<grd_zarr(ptcl2%iz) .or. ptcl%z/=ptcl%z) then
+              if(ierr==0) ierr = -99
+              write(0,*) 'prt_adv_ggrey: z not in cell', &
+                   ptcl2%iz,ptcl%z,grd_zarr(ptcl2%iz),grd_zarr(ptcl2%iz+1)
+           endif
+        endif
+!-- check for errors
+        if(ierr/=0 .or. ptcl2%istep>1000) then
+           write(0,*) 'pagg: ierr,ipart,istep,idist:',ierr,ptcl2%ipart,ptcl2%istep,ptcl2%idist
+           write(0,*) 'dist:',ptcl2%dist
+           write(0,*) 't:',ptcl%t
+           write(0,*) 'ix,iy,iz,ic,ig:',ptcl2%ix,ptcl2%iy,ptcl2%iz,ptcl2%ic,ptcl2%ig
+           write(0,*) 'x,y,z:',ptcl%x,ptcl%y,ptcl%z
+           write(0,*) 'mu,om:',ptcl%mu,ptcl%om
+           write(0,*) 'mux,muy,muz:',ptcl2%mux,ptcl2%muy,ptcl2%muz
+           write(0,*)
+           if(ierr>0) then
+              if(trn_errorfatal) stop 'particle_advance_gg: fatal transport error'
+              ptcl2%stat = 'dead'
+              exit
+           endif
+        endif
+     enddo
+!-- write to sndbuff chenx ---------------------------------------------!
+     if(ptcl2%stat=='buff') then
+        ipcmplt = ipcmplt + 1
+        newrank=getRankId(myGhosts,ptcl2%ic)
+        r=nbrs(newrank+1)
+        !if(impi==0) then ! don't print
+        !   write(6,'(A12,I2,A2,I2,A2,I5,A8,I3,A2)') 'buff@rank(',impi,&
+        !     &') ',sndidx(r),'@  thrd(',iomp,')'
+        !endif
+        if(sndidx(r)<BUFFSIZE) then
+!           call writeBuffer(impi,iomp,sndbf,&
+!                &sndidx,r,ptcl,ptcl2)
+        else
+!           call sendBuffer(impi,iomp,sndbf, &
+!                &sndidx,r,newrank)
+!           call writeBuffer(impi,iomp,sndbf,&
+!                &sndidx,r,ptcl,ptcl2)
+        endif
+     endif
+!-- end write to sndbuff -----------------------------------------------!
 !
 !-- outbound luminosity tally
      if(ptcl2%stat=='flux') then
+        ipcmplt = ipcmplt + 1
 !-- lab frame flux group, polar, azimuthal bin
         imu = binsrch(mu,flx_mu,flx_nmu+1,.false.)
         iom = binsrch(om,flx_om,flx_nom+1,.false.)
@@ -308,13 +426,15 @@ subroutine particle_advance_gamgrey(impi,nmpi)
         endselect
         if(grd_isvelocity) labfact=labfact*tsp_t
         help=help-labfact
-!-- tally outbound luminosity
+        !-- tally outbound luminosity
         flx_gamlumtime(imu,iom) = flx_gamlumtime(imu,iom)+help
         flx_gamluminos(imu,iom) = flx_gamluminos(imu,iom)+e
         flx_gamlumdev(imu,iom) = flx_gamlumdev(imu,iom)+e**2
         flx_gamlumnum(imu,iom) = flx_gamlumnum(imu,iom)+1
      endif
-
+     if(ptcl2%stat=='dead') then
+        ipcmplt = ipcmplt + 1
+     endif
   enddo !ipart
 !$omp end do
 !
@@ -322,6 +442,41 @@ subroutine particle_advance_gamgrey(impi,nmpi)
   rnd_states(iomp+1) = rndstate
 !$omp end parallel
 
+
+! milagro transport particles in buffer chenx
+  i=0
+  !do while((.not.globalFinish).and.(i<10))
+  do while(i<10)
+     i = i + 1
+     !call checkBuffer(impi,db2r,lhasBuff)
+  !   write(6,*) '@advgam,globalfinish loop',impi,iomp,lhasBuff,i
+     !if(.true. .eqv. any(lhasBuff)) then
+     !   write(6,*) 'read buffer'
+     !   do i=1, size(db2r)
+     !   enddo
+     !endif
+
+
+!$omp parallel &
+!$omp shared(nvol) &
+!$omp private(ptcl,ptcl2,x0,y0,z0,mu0,om0,cmffact,gm,mu1,mu2,eta,xi,labfact,iom,imu, &
+!$omp    rndstate,edep,ierr, iomp, &
+!$omp    x,y,z,mu,om,e,e0,ix,iy,iz,ic,icold,r1, &
+!$omp    i,j,k, newrank, r, sndbuff, sndbuff2, sndidx) &
+!$omp reduction(+:grd_tally,flx_gamluminos,flx_gamlumnum, &
+!$omp    flx_gamlumdev,flx_gamlumtime,ipcmplt)
+
+!-- thread id
+!$ iomp = omp_get_thread_num()
+     rndstate = rnd_states(iomp+1)
+     sndidx=0                                                ! chenx
+!-- save state
+     rnd_states(iomp+1) = rndstate
+!$omp end parallel
+
+  enddo
+
+  !write(6,*) '@fter advgam',impi,iomp,ipcmplt
   tot_sfluxgamma = -sum(flx_gamluminos)
 
 !-- convert to flux per second

@@ -31,7 +31,7 @@ program supernu
 !***********************************************************************
 ! TODO and wishlist:
 !***********************************************************************
-  integer :: ierr, it
+  integer :: ierr, it, gasidx
   integer :: icell1, ncell !number of cells per rank (gas_ncell)
   integer :: iitflux,itflux=0
   real*8 :: t0, t1 !timing
@@ -42,6 +42,7 @@ program supernu
   call mpi_comm_rank(MPI_COMM_WORLD,impi,ierr) !MPI
   call mpi_comm_size(MPI_COMM_WORLD,nmpi,ierr) !MPI
   lmpi0 = impi==impi0
+  call define_mpi_str
 !
 !-- initialize timing module
   call timingmod_init
@@ -108,7 +109,7 @@ program supernu
   call grid_setup
 !-- setup gas
   call gasmod_init(lmpi0,icell1,ncell,grp_ng)
-  call gas_setup(dd_indexes) !chenx
+  call gas_setup
 !-- inputstr no longer needed
   call inputstr_dealloc
 
@@ -154,7 +155,7 @@ program supernu
      t_timelin(1) = t_time() !timeline
 !-- allow negative and zero it for temperature initialization purposes
      tsp_it = max(it,1)
-
+     globalFinish=.false. ! chenx: init globalfinish for each time step
 !-- Update tsp_t etc
      call timestep_update
      call tau_update(tsp_t,tsp_tfirst,tsp_tlast) !updating trn_tauddmc and trn_taulump

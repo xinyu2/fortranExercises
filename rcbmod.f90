@@ -5,7 +5,6 @@
 !
 !Platon Karpov
 module rcbmod
-  use milagromod
   implicit none
   type slimer
      integer :: rank ! impi
@@ -96,7 +95,6 @@ contains
 
   end function bisect
 
-
   recursive function restruct(d1,d2,counter_arg,nmpi, counts)
     implicit none
     integer :: nmpi, counter, x1, x2, y1, y2, z1, z2
@@ -148,7 +146,6 @@ contains
     endif
 
   end function restruct
-
 
   subroutine check_neighbor(ighost,num_ghosts, dd_a, a_dum, counter, x_d, y_d, z_d, &
        & side, outer, inner, nmpi, counts, displs, box, x,y,z)
@@ -265,110 +262,6 @@ contains
 
   end subroutine check_neighbor
 
-  subroutine check_neighbor2(myghosts, dd, a_dum, counter, x_d, y_d, z_d, &
-       & side, outer, inner,   box, x,y,z)
-    implicit none
-    integer, intent(in) :: x_d, y_d, z_d, side
-    integer, intent(in) :: outer, inner,  x, y, z
-    integer, intent(in) :: box(x,y,z)
-    type(cell), intent(in),    dimension(:) :: dd
-    integer, intent(in) :: a_dum(x_d,y_d,z_d)
-    type(cell), intent(inout), dimension(:) :: myghosts
-    integer, intent(inout) :: counter
-    integer :: escaped, look_i, look_n
-    integer :: i, j, rank, one, two
-    do j=1, outer
-       do i=1, inner
-          escaped = -1
-
-          !check if the cells are on the domain boundary (side)
-          !which means the ghost cells are out of the domain (-1)
-          select case(side)
-          case(1)
-             look_i = box(i,j,1)
-             look_n = look_i-x_d*y_d
-             yolo1: do one = 1, y_d
-                do two = 1, x_d
-                   if(look_i==a_dum(two,one,1)) then
-                      escaped = 1
-                      exit yolo1
-                   endif
-                enddo
-             enddo yolo1
-          case(2)
-             look_i = box(i,j,z)
-             look_n = look_i+x_d*y_d
-             yolo2: do one = 1, y_d
-                do two = 1, x_d
-                   if(look_i==a_dum(two,one,z_d)) then
-                      escaped = 1
-                      exit yolo2
-                   endif
-                enddo
-             enddo yolo2
-          case(3)
-             look_i = box(i,1,j)
-             look_n = look_i-y_d+x_d !+x_d chenx
-             yolo3: do one = 1, z_d
-                do two = 1, x_d
-                   if(look_i==a_dum(two,1,one)) then
-                      escaped = 1
-                      exit yolo3
-                   endif
-                enddo
-             enddo yolo3
-          case(4)
-             look_i = box(i,y,j)
-             look_n = look_i+y_d-x_d !-x_d chenx
-             yolo4: do one = 1, z_d
-                do two = 1, x_d
-                   if(look_i==a_dum(two,y_d,one)) then
-                      escaped = 1
-                      exit yolo4
-                   endif
-                enddo
-             enddo yolo4
-          case(5)
-             look_i = box(1,i,j)
-             look_n = look_i-1
-             yolo5: do one = 1, z_d
-                do two = 1, y_d
-                   if(look_i==a_dum(1,two,one)) then
-                      escaped = 1
-                      exit yolo5
-                   endif
-                enddo
-             enddo yolo5
-          case(6)
-             look_i = box(x,i,j)
-             look_n = look_i+1
-             yolo6: do one = 1, z_d
-                do two = 1, y_d
-                   if(look_i==a_dum(x_d,two,one)) then
-                      escaped = 1
-                      exit yolo6
-                   endif
-                enddo
-             enddo yolo6
-          case default
-             stop 'invalid side'
-          end select
-          !put ghost cell index into dictionary
-
-          !if particles escaped, assign rank=-1, hence out of boundary
-          if(escaped == 1) then
-             !else, find the rank, which has the ghost cell
-          else
-             myghosts(counter)%gid = look_n
-             rank=dd(look_n)%rid
-             !put rank #, which contains the ghost cell index into dictionary
-             myghosts(counter)%rid = rank
-             counter = counter + 1
-          endif
-       enddo
-    enddo
-  end subroutine check_neighbor2
-
   subroutine ghost_busters(dd_a, x_d, y_d, z_d, counts, displs, nmpi, sizes, ghosts)
     implicit none
     integer :: x_d, y_d, z_d, x,y,z,i, n, num_ghosts, counter
@@ -430,69 +323,6 @@ contains
 
   end subroutine ghost_busters
 
-  subroutine getGhost(dd_a, dd, x_d, y_d, z_d, counts, displs, nmpi, impi, x,y,z, myghosts)
-    use gridmod
-    implicit none
-    integer,intent(in) :: x_d, y_d, z_d
-    integer,intent(in) :: nmpi,impi
-    integer,intent(in),dimension(:) :: dd_a
-    type(cell),intent(in),dimension(:) :: dd
-    integer,intent(in),dimension(nmpi) :: counts, displs
-    integer,intent(in) :: x,y,z
-
-    type(cell), intent(out),dimension(:),allocatable :: myghosts
-
-    integer :: i, n, num_ghosts, counter
-    integer, dimension(x_d*y_d*z_d) :: a
-    integer :: a_dum(x_d,y_d,z_d)
-    integer, allocatable :: box(:,:,:)
-    !create a 3D version of the domain
-    a(:) = (/((i), i=1,size(a))/)
-    a_dum = reshape(a(:),(/x_d,y_d,z_d/))
-
-    n=impi+1
-    !iterate through all of the ranks
-
-
-    allocate(box(x,y,z))
-    box = reshape(dd_a(displs(n):displs(n)+counts(n)-1),(/x,y,z/))
-
-    select case(grd_igeom)
-    case(1,11)
-       num_ghosts=4
-    case(2)
-       num_ghosts=4*(x+y)
-    case(3)
-       num_ghosts=4*(x*y+y*z+x*z)
-    case default
-       stop 'invalid grd-igeom'
-    end select
-
-    allocate(myghosts(num_ghosts))
-    myghosts%gid = -1
-    myghosts%rid = -1
-    counter = 1
-
-    !get ghosts of all 6 sides
-    call check_neighbor2(myghosts, dd, a_dum, counter, &
-         & x_d, y_d, z_d, 1, y, x,   box, x,y,z)
-
-    call check_neighbor2(myghosts, dd, a_dum, counter, &
-         & x_d, y_d, z_d, 2, y, x,   box, x,y,z)
-
-    call check_neighbor2(myghosts, dd, a_dum, counter, &
-         & x_d, y_d, z_d, 3, z, x,   box, x,y,z)
-
-    call check_neighbor2(myghosts, dd, a_dum, counter, &
-         & x_d, y_d, z_d, 4, z, x,   box, x,y,z)
-
-    call check_neighbor2(myghosts, dd, a_dum, counter, &
-         & x_d, y_d, z_d, 5, z, y,   box, x,y,z)
-
-    call check_neighbor2(myghosts, dd, a_dum, counter, &
-         & x_d, y_d, z_d, 6, z, y,   box, x,y,z)
-    deallocate(box)
-  end subroutine getGhost
 
   subroutine dimensions(dd_a, x, y, z, counts, displs, nmpi, sizes)
     implicit none
@@ -541,72 +371,4 @@ contains
     enddo
 
   end subroutine dimensions
-
-  subroutine myDimensions(dd_a, x, y, z, counts, displs, nmpi, impi, dim_x, dim_y,dim_z)
-    implicit none
-    integer, intent(in)  :: x,y,z
-    integer, intent(in)  :: nmpi,impi
-    integer, intent(in), dimension(z*y*x) :: dd_a
-    integer, intent(in), dimension(nmpi) :: counts, displs
-    integer, intent(out) ::dim_x, dim_y, dim_z
-    integer :: i, j, k
-
-    i=impi+1
-
-    dim_x = 0
-    dim_y = 0
-
-    !calculate dimension 'x' of the rank
-    do j=displs(i), displs(i)+counts(i)-1
-       if(dd_a(j)==x*y*z) then
-          dim_x = dim_x + 1
-          exit
-       endif
-
-       if (dd_a(j)<dd_a(displs(i))+x) then
-          dim_x = dim_x + 1
-       else
-          exit
-       endif
-       if (dd_a(j+1)-dd_a(j)/=1) exit
-    enddo
-
-    !get absolute 'z' boundary of the rank to calculate 'y'
-    do k=1, z
-       if(x*y*(k-1)<dd_a(displs(i)) .and. dd_a(displs(i))<=x*y*k) exit
-    enddo
-
-    !calculate dimension 'y' of the rank
-    do j=displs(i), displs(i)+counts(i)-1, dim_x
-       if(dd_a(j)>k*x*y) exit
-       dim_y = dim_y + 1
-    enddo
-
-    !calculate dimension 'z' of the rank
-    dim_z = counts(i)/(dim_x*dim_y)
-
-  end subroutine myDimensions
-
-  subroutine getNeighbors(nmpi,myghosts,nbrs,totnbr)
-    implicit none
-    integer,intent(in)::nmpi
-    type(cell),intent(in),dimension(:) :: myghosts
-    integer,dimension(:),intent(out),allocatable::nbrs
-    integer,intent(out) :: totnbr
-    integer::i,r
-    allocate(nbrs(nmpi))
-    !******************
-    !* initialize nbrs
-    !******************
-    nbrs=0
-    totnbr=0
-    !********************
-    !* nbrs for strip-dd
-    !********************
-    do i=1,size(pack(myghosts%rid,myghosts%rid>-1))
-       r=myghosts(i)%rid
-       nbrs(r+1)=1
-    enddo
-    totnbr=size(pack(nbrs,nbrs==1))
-  end subroutine getNeighbors
 end module rcbmod

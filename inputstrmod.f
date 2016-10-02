@@ -25,6 +25,7 @@ c-- domain compression
       logical :: str_lvoid=.false.  !flag existence of void cells
       integer :: str_nc=0  !number of cells in compressed grid
       integer,allocatable :: str_idcell(:) !(nc)
+      integer,allocatable :: str_ddcell(:) !(nc) chenx
       real*8,allocatable :: str_massdc(:) !(nc)
       real*8,allocatable :: str_massfrdc(:,:) !(nabund,nc)
       real*8,allocatable :: str_tempdc(:) !(nc)
@@ -54,6 +55,7 @@ c     ---------------------------!{{{
       if(allocated(str_iabund)) deallocate(str_iabund)
       deallocate(str_xleft,str_yleft,str_zleft)
       deallocate(str_idcell)
+      deallocate(str_ddcell) !chenx
 !     deallocate(str_massdc,str_massdd)
 !     milagro dd
       if(allocated(str_massdc)) deallocate(str_massdc)
@@ -113,16 +115,16 @@ c-- copy
 c--         write(6,*) '>>> good nmpi',remainder
          else
 c--         write(6,*) '>>> bad  nmpi',remainder
-            stop '>>> nmpi difficult decomposition'
+            !stop '>>> nmpi difficult decomposition'
          endif
       case(3)
          remainder=mod(int(((nx*ny*nz)/(nmpi))**(1.0/3.0)),2)
          if(remainder==0) then
-            write(6,*) '>>> good nmpi',remainder
+c--         !write(6,*) '>>> good nmpi',remainder
          else
-            write(6,*) '>>> bad  nmpi',((nx*ny*nz)/(nmpi+0.0))
-     &                  **(1.0/3.0),remainder
-            stop '>>> nmpi difficult decomposition'
+c--         !write(6,*) '>>> bad  nmpi',((nx*ny*nz)/(nmpi+0.0))
+c--  !&                  **(1.0/3.0),remainder
+            !stop '>>> nmpi difficult decomposition'
          endif
       case(11)
       case default
@@ -384,6 +386,7 @@ c-- add void cell
       endif
 c
       allocate(str_idcell(str_nc))
+      allocate(str_ddcell(str_nc)) !chenx
       allocate(str_massdc(str_nc))
       if(str_nabund>0) then
        allocate(str_massfrdc(str_nabund,str_nc))
@@ -393,6 +396,7 @@ c
       if(str_lye) allocate(str_yedc(str_nc))
 c-- zero all, including the dummy cell
       str_idcell = 0
+      str_ddcell = 0 !chenx
       str_massdc = 0d0
 c-- void temp [K]
       if(str_ltemp) str_tempdc = 1000d0
