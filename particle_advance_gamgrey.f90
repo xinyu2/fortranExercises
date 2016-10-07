@@ -27,13 +27,14 @@ subroutine particle_advance_gamgrey(impi,nmpi)
   !propagation in the next time step.  Currently DDMC and IMC particle events
   !are being handled in separate subroutines but this may be changed to reduce
   !total subroutine calls in program.
-!##################################################
+  !##################################################
+  integer :: istat(MPI_STATUS_SIZE)
   integer :: ierr
   !integer :: nhere, nemit, ndmy -- chenx
   real*8 :: r1, edep, help
   integer :: i,j,k,l, ii, iimpi !,gas_idx -- chenx
   integer :: imu, iom, icold
-  integer :: r,newrank ! chenx
+  integer :: r,newrank,temprb,temprb2,nbf,nbf2 ! chenx
   integer,pointer :: ic
   integer,pointer :: ix, iy, iz
   real*8,pointer :: x,y,z,mu,om,e,e0
@@ -137,18 +138,20 @@ subroutine particle_advance_gamgrey(impi,nmpi)
   !enddo
   !enddo
   !enddo
-
+  call mpi_reduce(npart,maxpars,1,MPI_INTEGER,MPI_SUM,&
+       &  0,MPI_COMM_WORLD,ierr) !chenx
   call recvMaxParBuff(impi,db2r)
-  call recvChdParComplete
+  call recvChdParComplete(impi)
   if(tn%parent>=0) then
-     call recvParentFinish
+     call recvParentFinish(impi)
   endif
+
 !$omp parallel &
 !$omp shared(nvol) &
 !$omp private(ptcl,ptcl2,x0,y0,z0,mu0,om0,cmffact,gm,mu1,mu2,eta,xi,labfact,iom,imu, &
 !$omp    rndstate,edep,ierr, iomp, &
 !$omp    x,y,z,mu,om,e,e0,ix,iy,iz,ic,icold,r1, &
-!$omp    i,j,k, newrank, r, sndbuff, sndbuff2, sndbf, sndidx) &
+!$omp    i,j,k, newrank, r, sndbuff, sndbuff2, sndidx) &
 !$omp reduction(+:grd_tally,flx_gamluminos,flx_gamlumnum, &
 !$omp    flx_gamlumdev,flx_gamlumtime,ipcmplt)
 
@@ -158,9 +161,8 @@ subroutine particle_advance_gamgrey(impi,nmpi)
   sndidx=0                                                ! chenx
   sndbuff=packet(0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0)     ! chenx
   sndbuff2=packet2(0.0,0.0,0.0,0.0,' ',0,0,0,0,0,0,0,0,0) ! chenx
-  sndbf%pb1=packet(0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0)   ! chenx
-  sndbf%pb2=packet2(0.0,0.0,0.0,0.0,' ',0,0,0,0,0,0,0,0,0)! chenx
   ipcmplt = 0                                             ! chenx
+  nbf=0
 !
 !-- primary particle properties
   x => ptcl%x
@@ -311,7 +313,6 @@ subroutine particle_advance_gamgrey(impi,nmpi)
 
      ptcl2%stat = 'live'
 !
-!    @@@ call movePar(ptcl,ptcl2,rndstate)
      do while (ptcl2%stat=='live')
         ptcl2%istep = ptcl2%istep + 1
         icold = ptcl2%ic
@@ -387,21 +388,22 @@ subroutine particle_advance_gamgrey(impi,nmpi)
      enddo
 !-- write to sndbuff chenx ---------------------------------------------!
      if(ptcl2%stat=='buff') then
-        ipcmplt = ipcmplt + 1
+        nbf=nbf+1
         newrank=getRankId(myGhosts,ptcl2%ic)
         r=nbrs(newrank+1)
         !if(impi==0) then ! don't print
         !   write(6,'(A12,I2,A2,I2,A2,I5,A8,I3,A2)') 'buff@rank(',impi,&
         !     &') ',sndidx(r),'@  thrd(',iomp,')'
         !endif
+        !write(6,*) 'wrt',impi,newrank,ptcl2%ipart,nbf
         if(sndidx(r)<BUFFSIZE) then
-!           call writeBuffer(impi,iomp,sndbf,&
-!                &sndidx,r,ptcl,ptcl2)
+           call writeBuffer(impi,iomp,sndbuff,sndbuff2,&
+                &sndidx,r,ptcl,ptcl2)
         else
-!           call sendBuffer(impi,iomp,sndbf, &
-!                &sndidx,r,newrank)
-!           call writeBuffer(impi,iomp,sndbf,&
-!                &sndidx,r,ptcl,ptcl2)
+           call sendBuffer(impi,iomp,sndbuff,sndbuff2, &
+                &sndidx,r,newrank)
+           call writeBuffer(impi,iomp,sndbuff,sndbuff2,&
+                &sndidx,r,ptcl,ptcl2)
         endif
      endif
 !-- end write to sndbuff -----------------------------------------------!
@@ -435,48 +437,247 @@ subroutine particle_advance_gamgrey(impi,nmpi)
      if(ptcl2%stat=='dead') then
         ipcmplt = ipcmplt + 1
      endif
+     if(ipart==1)then ! last local particle
+        do r=1,size(db2r)
+           if(sndidx(r)>0) then
+              call sendBuffer(impi,iomp,sndbuff,sndbuff2, &
+                   &sndidx,r,db2r(r))
+           endif
+        enddo
+     endif
   enddo !ipart
 !$omp end do
 !
 !-- save state
   rnd_states(iomp+1) = rndstate
 !$omp end parallel
-
-
+  !write(6,*) 'after local',impi,ipcmplt,maxpars,'wrtbf',nbf,globalFinish
 ! milagro transport particles in buffer chenx
   i=0
-  !do while((.not.globalFinish).and.(i<10))
-  do while(i<10)
+  x => ptcl%x
+  y => ptcl%y
+  z => ptcl%z
+  mu => ptcl%mu
+  om => ptcl%om
+  e => ptcl%e
+  e0 => ptcl%e0
+!-- secondary particle properties
+  ix => ptcl2%ix
+  iy => ptcl2%iy
+  iz => ptcl2%iz
+  ic => ptcl2%ic
+  nbf=0
+  nbf2=0
+!  if(tn%lchild>0)then
+!     call mpi_irecv(pcomplete(1),1,MPI_INTEGER,tn%lchild,rpctag,&
+!          & MPI_COMM_WORLD,reqpc(1),ierr)
+!  endif
+!  if(tn%rchild>0)then
+!     call mpi_irecv(pcomplete(2),1,MPI_INTEGER,tn%rchild,rpctag,&
+!          & MPI_COMM_WORLD,reqpc(2),ierr)
+!  endif
+  do while((i<60000).and.(.not.globalFinish))
+  !do while(.not.globalFinish)
      i = i + 1
-     !call checkBuffer(impi,db2r,lhasBuff)
-  !   write(6,*) '@advgam,globalfinish loop',impi,iomp,lhasBuff,i
-     !if(.true. .eqv. any(lhasBuff)) then
-     !   write(6,*) 'read buffer'
-     !   do i=1, size(db2r)
-     !   enddo
-     !endif
+     call tallyPcomplete(impi,tn,ipcmplt)
+     do j=1, size(db2r)
+        temprb=reqrb(j)
+        temprb2=reqrb2(j)
+        call mpi_test(reqrb(j),rbflag(j),istat,ierr)
+        call mpi_test(reqrb2(j),rb2flag(j),istat,ierr)
+        lhas= rbflag(j).and. rb2flag(j)
+        if(lhas) then
+           do k=1,BUFFSIZE
+              ptcl=rcvbuff(k,j)
+              ptcl2=rcvbuff2(k,j)
+              if(ptcl2%ipart/=0) then
+                 ptcl2%stat='live'
+                 nbf=nbf+1
+                 !write(6,*) 'rcv',impi,'rb',temprb,temprb2,'ipart',ptcl2%ipart
+              endif
+!----- transport buffer
+              do while (ptcl2%stat=='live')
+                 ptcl2%istep = ptcl2%istep + 1
+                 icold = ptcl2%ic
+                 call transport_gamgrey(ptcl,ptcl2,rndstate,edep,ierr)
+!-- tally
+                 grd_tally(1,icold) = grd_tally(1,icold) + edep
 
+!-- Russian roulette for termination of exhausted particles
+                 if(ptcl%e<1d-6*e0 .and. ptcl2%stat=='live' .and. grd_capgam(ptcl2%ic)>0d0) then
+                    call rnd_r(r1,rndstate)!{{{
+                    if(r1<0.5d0) then
+!-- transformation factor
+                       if(grd_isvelocity) then
+                          select case(grd_igeom)
+                          case(1,11)
+                             labfact = 1.0d0 - ptcl%mu*x/pc_c
+                          case(2)
+                             labfact = 1d0-(ptcl%mu*ptcl%y+sqrt(1d0-ptcl%mu**2) * &
+                                  cos(ptcl%om)*ptcl%x)/pc_c
+                          case(3)
+                             labfact = 1d0-(ptcl%mu*ptcl%z+sqrt(1d0-ptcl%mu**2) * &
+                                  (cos(ptcl%om)*ptcl%x+sin(ptcl%om)*ptcl%y))/pc_c
+                          endselect
+                       else
+                          labfact = 1d0
+                       endif
+!
+                       ptcl2%stat = 'dead'
+                       grd_tally(1,ptcl2%ic) = grd_tally(1,ptcl2%ic) + ptcl%e*labfact
+                    else
+                       ptcl%e = 2d0*ptcl%e
+                       ptcl%e0 = 2d0*ptcl%e0
+                    endif!}}}
+                 endif
 
-!$omp parallel &
-!$omp shared(nvol) &
-!$omp private(ptcl,ptcl2,x0,y0,z0,mu0,om0,cmffact,gm,mu1,mu2,eta,xi,labfact,iom,imu, &
-!$omp    rndstate,edep,ierr, iomp, &
-!$omp    x,y,z,mu,om,e,e0,ix,iy,iz,ic,icold,r1, &
-!$omp    i,j,k, newrank, r, sndbuff, sndbuff2, sndidx) &
-!$omp reduction(+:grd_tally,flx_gamluminos,flx_gamlumnum, &
-!$omp    flx_gamlumdev,flx_gamlumtime,ipcmplt)
-
-!-- thread id
-!$ iomp = omp_get_thread_num()
-     rndstate = rnd_states(iomp+1)
-     sndidx=0                                                ! chenx
-!-- save state
-     rnd_states(iomp+1) = rndstate
-!$omp end parallel
-
+!-- verify position
+                 if(ptcl2%stat=='live') then
+                    if(ptcl%x>grd_xarr(ptcl2%ix+1) .or. ptcl%x<grd_xarr(ptcl2%ix) .or. ptcl%x/=ptcl%x) then
+                       if(ierr==0) ierr = -99
+                       write(0,*) 'prt_adv_ggrey: x not in cell', &
+                            ptcl2%ix,ptcl%x,grd_xarr(ptcl2%ix),grd_xarr(ptcl2%ix+1)
+                    endif
+                    if(ptcl%y>grd_yarr(ptcl2%iy+1) .or. ptcl%y<grd_yarr(ptcl2%iy) .or. ptcl%y/=ptcl%y) then
+                       if(ierr==0) ierr = -99
+                       write(0,*) 'prt_adv_ggrey: y not in cell', &
+                            ptcl2%iy,ptcl%y,grd_yarr(ptcl2%iy),grd_yarr(ptcl2%iy+1)
+                    endif
+                    if(ptcl%z>grd_zarr(ptcl2%iz+1) .or. ptcl%z<grd_zarr(ptcl2%iz) .or. ptcl%z/=ptcl%z) then
+                       if(ierr==0) ierr = -99
+                       write(0,*) 'prt_adv_ggrey: z not in cell', &
+                            ptcl2%iz,ptcl%z,grd_zarr(ptcl2%iz),grd_zarr(ptcl2%iz+1)
+                    endif
+                 endif
+!-- check for errors
+                 if(ierr/=0 .or. ptcl2%istep>1000) then
+                    write(0,*) 'pagg: ierr,ipart,istep,idist:',ierr,ptcl2%ipart,ptcl2%istep,ptcl2%idist
+                    write(0,*) 'dist:',ptcl2%dist
+                    write(0,*) 't:',ptcl%t
+                    write(0,*) 'ix,iy,iz,ic,ig:',ptcl2%ix,ptcl2%iy,ptcl2%iz,ptcl2%ic,ptcl2%ig
+                    write(0,*) 'x,y,z:',ptcl%x,ptcl%y,ptcl%z
+                    write(0,*) 'mu,om:',ptcl%mu,ptcl%om
+                    write(0,*) 'mux,muy,muz:',ptcl2%mux,ptcl2%muy,ptcl2%muz
+                    write(0,*)
+                    if(ierr>0) then
+                       if(trn_errorfatal) stop 'particle_advance_gg: fatal transport error'
+                       ptcl2%stat = 'dead'
+                       exit
+                    endif
+                 endif
+                 !write(6,*) 'rcv buff@rnk',impi,'@',nbf,ptcl2%ipart,ptcl2%stat
+              enddo
+!-- write to sndbuff chenx ---------------------------------------------!
+              if(ptcl2%stat=='buff') then
+                 nbf2=nbf2+1
+                 newrank=getRankId(myGhosts,ptcl2%ic)
+                 r=nbrs(newrank+1)
+                 !write(6,*) 'wrt buff2@rnk',impi,'@',nbf2,ptcl2%ipart,ptcl2%stat,sndidx
+                 if(sndidx(r)<BUFFSIZE) then
+                    call writeBuffer(impi,iomp,sndbuff,sndbuff2,&
+                         &sndidx,r,ptcl,ptcl2)
+                 else
+                    call sendBuffer(impi,iomp,sndbuff,sndbuff2, &
+                         &sndidx,r,newrank)
+                    call writeBuffer(impi,iomp,sndbuff,sndbuff2,&
+                         &sndidx,r,ptcl,ptcl2)
+                 endif
+              endif
+!-- end write to sndbuff -----------------------------------------------!
+!
+!-- outbound luminosity tally
+              if(ptcl2%stat=='flux') then
+                 ipcmplt = ipcmplt + 1
+!-- lab frame flux group, polar, azimuthal bin
+                 imu = binsrch(mu,flx_mu,flx_nmu+1,.false.)
+                 iom = binsrch(om,flx_om,flx_nom+1,.false.)
+!-- observer corrected time
+                 help=tsp_t+.5d0*tsp_dt
+                 select case(grd_igeom)
+                 case(1,11)
+                    labfact = mu*x/pc_c
+                 case(2)
+                    labfact = (mu*y+sqrt(1d0-mu**2) * &
+                         cos(om)*x)/pc_c
+                 case(3)
+                    labfact = (mu*z+sqrt(1d0-mu**2) * &
+                         (cos(om)*x+sin(om)*y))/pc_c
+                 endselect
+                 if(grd_isvelocity) labfact=labfact*tsp_t
+                 help=help-labfact
+        !-- tally outbound luminosity
+                 flx_gamlumtime(imu,iom) = flx_gamlumtime(imu,iom)+help
+                 flx_gamluminos(imu,iom) = flx_gamluminos(imu,iom)+e
+                 flx_gamlumdev(imu,iom) = flx_gamlumdev(imu,iom)+e**2
+                 flx_gamlumnum(imu,iom) = flx_gamlumnum(imu,iom)+1
+              endif
+              if(ptcl2%stat=='dead') then
+                 ipcmplt = ipcmplt + 1
+              endif
+!----- end transport buffer
+           enddo ! receive and transport incoming buffer
+           !write(6,*) 'rcvd',impi,nbf,'2ndbuff',nbf2
+           call mpi_irecv(rcvbuff(1,j),BUFFSIZE,pckttyp,&
+                &db2r(j),rbftag,MPI_COMM_WORLD,reqrb(j),ierr)
+           call mpi_irecv(rcvbuff2(1,j),BUFFSIZE,pckttyp2,&
+                &db2r(j),rbf2tag,MPI_COMM_WORLD,reqrb2(j),ierr)
+        endif
+        if(sndidx(j)>0) then
+           !write(6,*) '> send incoming > last par',impi,sndidx
+           call sendBuffer(impi,iomp,sndbuff,sndbuff2, &
+                &sndidx,j,db2r(j))
+        endif
+     enddo
+     !write(6,*) '@rnk', impi,ipcmplt,maxpars,'tr',tn
+     if(impi==0) then ! master rank
+        if(ipcmplt==maxpars) then
+           globalFinish=.true.
+           !write(6,*) '@0 global finish',globalFinish
+           if(tn%lchild>0) then
+              call mpi_send(globalFinish,1,MPI_LOGICAL,tn%lchild,&
+                   &rftag,MPI_COMM_WORLD,ierr)
+           endif
+           if(tn%rchild>0) then
+              call mpi_send(globalFinish,1,MPI_LOGICAL,tn%rchild,&
+                   &rftag,MPI_COMM_WORLD,ierr)
+           endif
+        endif
+     else             ! worker rank
+        if(ipcmplt>0) then
+           call mpi_send(ipcmplt,1,MPI_integer,tn%parent,&
+                &rpctag,MPI_COMM_WORLD,ierr)
+           ipcmplt=0
+        endif
+        call mpi_test(reqgf,rgfflag,istat,ierr)
+        if(rgfflag) then
+           !write(6,'(A5,I2,A20)') 'rank(',impi,') recv global finish'
+           if(tn%lchild>0) then
+              call mpi_send(globalFinish,1,MPI_LOGICAL,tn%lchild,&
+                   &rftag,MPI_COMM_WORLD,ierr)
+           endif
+           if(tn%rchild>0) then
+              call mpi_send(globalFinish,1,MPI_LOGICAL,tn%rchild,&
+                   &rftag,MPI_COMM_WORLD,ierr)
+           endif
+        endif
+     endif            ! end check globalfinish
+     if(globalFinish) then
+        do j=1,size(db2r)
+           if(reqrb(j)>0) then
+              call mpi_cancel(reqrb(j),ierr)
+           endif
+           if(reqrb2(j)>0) then
+              call mpi_cancel(reqrb2(j),ierr)
+           endif
+        enddo
+        do j = 1,2
+           if(reqpc(j)>0) then
+              call mpi_cancel(reqpc(j),ierr)
+           endif
+        enddo
+     endif
   enddo
-
-  !write(6,*) '@fter advgam',impi,iomp,ipcmplt
+  write(6,*) 'finish',impi,i,globalFinish
   tot_sfluxgamma = -sum(flx_gamluminos)
 
 !-- convert to flux per second
@@ -499,82 +700,5 @@ contains
     ix=idx-(iz-1)*grd_nx*grd_ny-(iy-1)*grd_nx
   end subroutine reverseMapping
 
-  subroutine movePar(ptcl,ptcl2,rndstate)
-    implicit none
-    type(packet),target,intent(inout) :: ptcl
-    type(packet2),target,intent(inout) :: ptcl2
-    type(rnd_t),intent(inout) :: rndstate
-    do while (ptcl2%stat=='live')
-       ptcl2%istep = ptcl2%istep + 1
-       icold = ptcl2%ic
-       call transport_gamgrey(ptcl,ptcl2,rndstate,edep,ierr)
-!-- tally
-       grd_tally(1,icold) = grd_tally(1,icold) + edep
-
-!-- Russian roulette for termination of exhausted particles
-       if(ptcl%e<1d-6*e0 .and. ptcl2%stat=='live' .and. grd_capgam(ptcl2%ic)>0d0) then
-          call rnd_r(r1,rndstate)!{{{
-          if(r1<0.5d0) then
-!-- transformation factor
-             if(grd_isvelocity) then
-                select case(grd_igeom)
-                case(1,11)
-                   labfact = 1.0d0 - ptcl%mu*x/pc_c
-                case(2)
-                   labfact = 1d0-(ptcl%mu*ptcl%y+sqrt(1d0-ptcl%mu**2) * &
-                        cos(ptcl%om)*ptcl%x)/pc_c
-                case(3)
-                   labfact = 1d0-(ptcl%mu*ptcl%z+sqrt(1d0-ptcl%mu**2) * &
-                        (cos(ptcl%om)*ptcl%x+sin(ptcl%om)*ptcl%y))/pc_c
-                endselect
-             else
-                labfact = 1d0
-             endif
-!
-             ptcl2%stat = 'dead'
-             grd_tally(1,ptcl2%ic) = grd_tally(1,ptcl2%ic) + ptcl%e*labfact
-          else
-             ptcl%e = 2d0*ptcl%e
-             ptcl%e0 = 2d0*ptcl%e0
-          endif!}}}
-       endif
-
-!-- verify position
-       if(ptcl2%stat=='live') then
-          if(ptcl%x>grd_xarr(ptcl2%ix+1) .or. ptcl%x<grd_xarr(ptcl2%ix) .or. ptcl%x/=ptcl%x) then
-             if(ierr==0) ierr = -99
-             write(0,*) 'prt_adv_ggrey: x not in cell', &
-                  ptcl2%ix,ptcl%x,grd_xarr(ptcl2%ix),grd_xarr(ptcl2%ix+1)
-          endif
-          if(ptcl%y>grd_yarr(ptcl2%iy+1) .or. ptcl%y<grd_yarr(ptcl2%iy) .or. ptcl%y/=ptcl%y) then
-             if(ierr==0) ierr = -99
-             write(0,*) 'prt_adv_ggrey: y not in cell', &
-                  ptcl2%iy,ptcl%y,grd_yarr(ptcl2%iy),grd_yarr(ptcl2%iy+1)
-          endif
-          if(ptcl%z>grd_zarr(ptcl2%iz+1) .or. ptcl%z<grd_zarr(ptcl2%iz) .or. ptcl%z/=ptcl%z) then
-             if(ierr==0) ierr = -99
-             write(0,*) 'prt_adv_ggrey: z not in cell', &
-                  ptcl2%iz,ptcl%z,grd_zarr(ptcl2%iz),grd_zarr(ptcl2%iz+1)
-          endif
-       endif
-
-!-- check for errors
-       if(ierr/=0 .or. ptcl2%istep>1000) then
-          write(0,*) 'pagg: ierr,ipart,istep,idist:',ierr,ptcl2%ipart,ptcl2%istep,ptcl2%idist
-          write(0,*) 'dist:',ptcl2%dist
-          write(0,*) 't:',ptcl%t
-          write(0,*) 'ix,iy,iz,ic,ig:',ptcl2%ix,ptcl2%iy,ptcl2%iz,ptcl2%ic,ptcl2%ig
-          write(0,*) 'x,y,z:',ptcl%x,ptcl%y,ptcl%z
-          write(0,*) 'mu,om:',ptcl%mu,ptcl%om
-          write(0,*) 'mux,muy,muz:',ptcl2%mux,ptcl2%muy,ptcl2%muz
-          write(0,*)
-          if(ierr>0) then
-             if(trn_errorfatal) stop 'particle_advance_gg: fatal transport error'
-             ptcl2%stat = 'dead'
-             exit
-          endif
-       endif
-    enddo
-  end subroutine movePar
 end subroutine particle_advance_gamgrey
 ! vim: fdm=marker
